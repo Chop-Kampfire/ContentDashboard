@@ -88,49 +88,25 @@ class TikTokScraper:
             Created Profile database object
         """
         username = username.lstrip("@").strip().lower()
-        
-        # #region agent log
-        print(f"[PULSE DEBUG] scraper.add_profile() ENTERED for username='{username}'", flush=True)
-        # #endregion
-        
         logger.info(f"📥 Adding new profile: @{username}")
         
         # Check if already exists
-        # #region agent log
-        print(f"[PULSE DEBUG] Checking if profile exists in DB...", flush=True)
-        # #endregion
-        
         with get_db_context() as db:
             existing = db.query(Profile).filter(Profile.username == username).first()
             if existing:
-                # #region agent log
-                print(f"[PULSE DEBUG] Profile EXISTS (id={existing.id}, is_active={existing.is_active})", flush=True)
-                # #endregion
-                
-                # IMPORTANT: Reactivate if it was soft-deleted
+                # Reactivate if it was soft-deleted
                 if not existing.is_active:
                     existing.is_active = True
                     db.commit()
-                    # #region agent log
-                    print(f"[PULSE DEBUG] Profile was INACTIVE - REACTIVATED!", flush=True)
-                    # #endregion
                     logger.info(f"Profile @{username} reactivated")
                 
                 logger.warning(f"Profile @{username} already exists, updating instead")
                 return await self.update_profile(username)
         
-        # #region agent log
-        print(f"[PULSE DEBUG] Profile does NOT exist, will create new. Fetching from TikTok API...", flush=True)
-        # #endregion
-        
         # Step 1: Fetch profile (gets user_id)
         try:
             profile_data = await self.tiktok.fetch_profile(username)
             user_id = profile_data.user_id
-            
-            # #region agent log
-            print(f"[PULSE DEBUG] Got profile from API: user_id={user_id}", flush=True)
-            # #endregion
             
             logger.info(f"📋 Got profile for @{username}, user_id: {user_id}")
             
@@ -142,15 +118,7 @@ class TikTokScraper:
             )
             
         except TikTokAPIError as e:
-            # #region agent log
-            print(f"[PULSE DEBUG] TikTokAPIError caught: {e}", flush=True)
-            # #endregion
             logger.error(f"❌ Failed to fetch @{username}: {e}")
-            raise
-        except Exception as e:
-            # #region agent log
-            print(f"[PULSE DEBUG] Unexpected error in API fetch: {type(e).__name__}: {e}", flush=True)
-            # #endregion
             raise
         
         # Calculate average views
@@ -197,12 +165,6 @@ class TikTokScraper:
             # Capture values BEFORE session closes (fix for detached instance error)
             saved_username = profile.username
             saved_follower_count = profile.follower_count
-            saved_id = profile.id
-            saved_is_active = profile.is_active
-            
-            # #region agent log
-            print(f"[PULSE DEBUG] scraper.add_profile: Profile saved - id={saved_id}, username={saved_username}, is_active={saved_is_active}", flush=True)
-            # #endregion
             
             logger.info(
                 f"✅ Added @{username} | "
@@ -216,18 +178,14 @@ class TikTokScraper:
             if send_notification:
                 try:
                     await self.telegram.send_welcome_alert(
-                        username=saved_username,  # Use captured value
-                        follower_count=saved_follower_count  # Use captured value
+                        username=saved_username,
+                        follower_count=saved_follower_count
                     )
                 except Exception as e:
                     logger.warning(f"Failed to send welcome notification: {e}")
             
             # Expunge the profile from session so it can be used after context closes
             db.expunge(profile)
-            
-            # #region agent log
-            print(f"[PULSE DEBUG] scraper.add_profile: Profile expunged, returning id={profile.id}", flush=True)
-            # #endregion
             
             return profile
     

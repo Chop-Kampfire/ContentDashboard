@@ -278,10 +278,6 @@ def get_all_profiles() -> pd.DataFrame:
     try:
         profiles = session.query(Profile).filter(Profile.is_active == True).all()
         
-        # #region agent log
-        print(f"[PULSE DEBUG] get_all_profiles: Found {len(profiles)} active profiles: {[p.username for p in profiles]}", flush=True)
-        # #endregion
-        
         data = [{
             "id": p.id,
             "username": p.username,
@@ -603,83 +599,24 @@ def format_number(n: int) -> str:
     return str(n)
 
 
-def _debug_log(data: dict):
-    """Helper to write debug logs - outputs to stdout for Railway logs."""
-    import json, time, sys
-    log_msg = json.dumps({**data, "timestamp": time.time()*1000})
-    
-    # Print to stdout with flush (visible in Railway logs)
-    print(f"[PULSE DEBUG] {log_msg}", flush=True)
-    sys.stdout.flush()
-    
-    # Also store in session state for UI display
-    if 'debug_logs' not in st.session_state:
-        st.session_state.debug_logs = []
-    st.session_state.debug_logs.append(data.get('message', log_msg))
-
 def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
     """Add a new profile to the watchlist."""
     from scraper import TikTokScraper
     
-    # #region agent log
-    _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:start","message":"Starting add profile","data":{"username":username}})
-    # #endregion
-    
     try:
-        # #region agent log
-        print(f"[PULSE DEBUG] Creating TikTokScraper instance...", flush=True)
-        # #endregion
         scraper = TikTokScraper()
-        
-        # #region agent log
-        print(f"[PULSE DEBUG] Creating event loop...", flush=True)
-        # #endregion
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # #region agent log
-        print(f"[PULSE DEBUG] Calling scraper.add_profile() for '{username}'...", flush=True)
-        # #endregion
-        
-        try:
-            profile = loop.run_until_complete(scraper.add_profile(username, send_notification=True))
-            print(f"[PULSE DEBUG] scraper.add_profile() returned successfully!", flush=True)
-        except Exception as scraper_err:
-            print(f"[PULSE DEBUG] scraper.add_profile() FAILED: {type(scraper_err).__name__}: {scraper_err}", flush=True)
-            raise
-        finally:
-            loop.close()
-        
-        # #region agent log
-        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:after_scraper","message":"Profile returned from scraper","data":{"profile_id":profile.id,"profile_username":profile.username,"is_active":profile.is_active}})
-        # #endregion
+        profile = loop.run_until_complete(scraper.add_profile(username, send_notification=True))
+        loop.close()
         
         # Clear cache to refresh data
         get_all_profiles.clear()
         get_aggregate_stats.clear()
-        get_all_posts.clear()  # Also clear posts cache
+        get_all_posts.clear()
         
-        # #region agent log
-        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:cache_cleared","message":"All caches cleared"})
-        # #endregion
-        
-        # Verify data can be fetched immediately
-        # #region agent log
-        fresh_profiles = get_all_profiles()
-        profile_count = len(fresh_profiles)
-        usernames_list = fresh_profiles['username'].tolist() if not fresh_profiles.empty else []
-        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:verify_fetch","message":"Fetched profiles after cache clear","data":{"profile_count":profile_count,"usernames":usernames_list}})
-        print(f"[PULSE DEBUG] Verification - Fresh profiles count: {profile_count}, usernames: {usernames_list}", flush=True)
-        # #endregion
-        
-        return True, f"Successfully added @{profile.username} (DB has {profile_count} profiles)"
+        return True, f"Successfully added @{profile.username}"
     except Exception as e:
-        # #region agent log
-        import traceback
-        tb = traceback.format_exc()
-        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:error","message":"Exception occurred","data":{"error":str(e),"error_type":type(e).__name__}})
-        print(f"[PULSE DEBUG ERROR] {type(e).__name__}: {e}\n{tb}", flush=True)
-        # #endregion
         return False, f"Error: {str(e)}"
 
 
