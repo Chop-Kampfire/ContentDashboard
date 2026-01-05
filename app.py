@@ -1,5 +1,5 @@
 """
-Pulse - TikTok Analytics Dashboard
+Pulse - Multi-Platform Analytics Dashboard
 Main Streamlit Application
 
 A sleek, investment-style analytics dashboard for tracking TikTok performance.
@@ -7,7 +7,6 @@ A sleek, investment-style analytics dashboard for tracking TikTok performance.
 
 import os
 import asyncio
-import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -16,21 +15,23 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from sqlalchemy import create_engine, func, desc
+from sqlalchemy import create_engine, func, desc, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from database.models import Base, Profile, ProfileHistory, Post, PostHistory, AlertLog
+from services.logger import get_logger, setup_root_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize logging
+setup_root_logger()
+logger = get_logger(__name__)
 
 # =============================================================================
 # PAGE CONFIG & STYLING
 # =============================================================================
 
 st.set_page_config(
-    page_title="Pulse • TikTok Analytics",
+    page_title="Pulse • Analytics Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -225,6 +226,19 @@ st.markdown("""
         border-radius: 12px;
         padding: 1rem;
     }
+    
+    /* Error box */
+    .schema-error {
+        background: linear-gradient(135deg, #2a1a1a 0%, #1a0a0a 100%);
+        border: 2px solid #ff6b6b;
+        border-radius: 12px;
+        padding: 2rem;
+        margin: 2rem 0;
+    }
+    
+    .schema-error h3 {
+        color: #ff6b6b;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -239,6 +253,7 @@ def get_database_engine():
     database_url = os.getenv("DATABASE_URL", "")
     
     if not database_url:
+        logger.error("DATABASE_URL environment variable not set")
         st.error("⚠️ DATABASE_URL environment variable not set")
         return None
     
@@ -246,11 +261,15 @@ def get_database_engine():
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
     
+    sql_echo = os.getenv("SQL_ECHO", "false").lower() == "true"
+    
     try:
-        engine = create_engine(database_url, pool_pre_ping=True)
+        engine = create_engine(database_url, pool_pre_ping=True, echo=sql_echo)
         Base.metadata.create_all(bind=engine)
+        logger.info("Database engine created successfully")
         return engine
     except Exception as e:
+        logger.error(f"Database connection failed: {e}")
         st.error(f"⚠️ Database connection failed: {e}")
         return None
 
@@ -262,6 +281,110 @@ def get_session():
         Session = sessionmaker(bind=engine)
         return Session()
     return None
+
+
+# =============================================================================
+# SCHEMA VALIDATION (STARTUP SANITY CHECK)
+# =============================================================================
+
+def check_schema_health() -> dict:
+    """
+    Check if required columns exist in the database.
+    Returns dict with 'healthy' bool and 'missing_columns' list.
+    """
+    engine = get_database_engine()
+    if not engine:
+        return {"healthy": False, "error": "No database connection", "missing_columns": []}
+    
+    result = {
+        "healthy": True,
+        "missing_columns": [],
+        "error": None,
+        "schema_version": "unknown"
+    }
+    
+    # Required columns for v0.0.2
+    required_columns = {
+        "profiles": ["platform", "platform_user_id", "user_role"],
+        "posts": ["platform", "upvote_ratio", "is_crosspost", "retweet_count", "quote_count"]
+    }
+    
+    try:
+        with engine.connect() as conn:
+            # Check schema version
+            check_platform = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'profiles' AND column_name = 'platform'
+            """))
+            
+            if check_platform.fetchone():
+                result["schema_version"] = "0.0.2"
+            else:
+                result["schema_version"] = "0.0.1"
+            
+            # Check all required columns
+            for table, columns in required_columns.items():
+                for column in columns:
+                    check = conn.execute(text("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = :table AND column_name = :column
+                    """), {"table": table, "column": column})
+                    
+                    if check.fetchone() is None:
+                        result["missing_columns"].append(f"{table}.{column}")
+                        result["healthy"] = False
+        
+        if result["missing_columns"]:
+            logger.error(f"Schema check FAILED - missing columns: {result['missing_columns']}")
+        else:
+            logger.info(f"Schema check PASSED - version {result['schema_version']}")
+            
+    except (OperationalError, ProgrammingError) as e:
+        result["healthy"] = False
+        result["error"] = str(e)
+        logger.error(f"Schema check ERROR: {e}")
+    
+    return result
+
+
+def display_schema_error(health: dict):
+    """Display a user-friendly schema error message."""
+    st.markdown("""
+    <div class="schema-error">
+        <h3>⚠️ Database Schema Out of Date</h3>
+        <p>The database is missing required columns for version 0.0.2.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.error("**Migration Required**")
+    
+    with st.expander("📋 Missing Columns", expanded=True):
+        for col in health.get("missing_columns", []):
+            st.code(col)
+    
+    st.markdown("### How to Fix")
+    st.markdown("""
+    Run the migration script using Railway CLI:
+    
+    ```bash
+    railway run python migrate_v002.py
+    ```
+    
+    Or run it locally with your DATABASE_URL set:
+    
+    ```bash
+    export DATABASE_URL="your-connection-string"
+    python migrate_v002.py
+    ```
+    """)
+    
+    st.info("After running the migration, refresh this page.")
+    
+    if health.get("error"):
+        with st.expander("🔧 Technical Details"):
+            st.code(health["error"])
 
 
 # =============================================================================
@@ -290,7 +413,11 @@ def get_all_profiles() -> pd.DataFrame:
             "last_updated": p.last_scraped_at
         } for p in profiles]
         
+        logger.debug(f"Fetched {len(data)} active profiles")
         return pd.DataFrame(data)
+    except Exception as e:
+        logger.error(f"Error fetching profiles: {e}")
+        return pd.DataFrame()
     finally:
         session.close()
 
@@ -341,7 +468,7 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
         
         data = [{
             "id": p.Post.id,
-            "post_id": p.Post.tiktok_post_id,
+            "post_id": p.Post.platform_post_id or p.Post.tiktok_post_id,
             "username": f"@{p.Profile.username}",
             "description": (p.Post.description or "")[:80] + "..." if p.Post.description and len(p.Post.description) > 80 else (p.Post.description or ""),
             "views": p.Post.view_count,
@@ -355,6 +482,9 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
         } for p in posts]
         
         return pd.DataFrame(data)
+    except Exception as e:
+        logger.error(f"Error fetching posts: {e}")
+        return pd.DataFrame()
     finally:
         session.close()
 
@@ -603,6 +733,8 @@ def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
     """Add a new profile to the watchlist."""
     from scraper import TikTokScraper
     
+    logger.info(f"Adding profile to watchlist: @{username}")
+    
     try:
         scraper = TikTokScraper()
         loop = asyncio.new_event_loop()
@@ -615,8 +747,10 @@ def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
         get_aggregate_stats.clear()
         get_all_posts.clear()
         
+        logger.info(f"Successfully added profile: @{profile.username}")
         return True, f"Successfully added @{profile.username}"
     except Exception as e:
+        logger.error(f"Failed to add profile @{username}: {e}")
         return False, f"Error: {str(e)}"
 
 
@@ -636,6 +770,7 @@ def remove_profile_from_watchlist(username: str) -> tuple[bool, str]:
             get_all_profiles.clear()
             get_aggregate_stats.clear()
             
+            logger.info(f"Removed profile from watchlist: @{username}")
             return True, f"Removed @{username} from watchlist"
         return False, f"Profile @{username} not found"
     finally:
@@ -653,7 +788,7 @@ def main():
     st.markdown("""
     <div class="pulse-header">
         <div class="pulse-title">📊 Pulse</div>
-        <div class="pulse-subtitle">TikTok Analytics Dashboard • Real-time performance tracking</div>
+        <div class="pulse-subtitle">Analytics Dashboard • Real-time performance tracking</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -662,6 +797,12 @@ def main():
     if not engine:
         st.warning("⚠️ Please configure DATABASE_URL environment variable to connect to PostgreSQL.")
         st.code("DATABASE_URL=postgresql://user:password@host:port/database")
+        return
+    
+    # SCHEMA SANITY CHECK
+    schema_health = check_schema_health()
+    if not schema_health["healthy"]:
+        display_schema_error(schema_health)
         return
     
     # Fetch data
@@ -963,11 +1104,11 @@ def main():
         else:
             st.info("Your watchlist is empty. Add TikTok profiles above to start tracking.")
         
-        # API Status
+        # System Status
         st.markdown("---")
         st.markdown("#### 🔧 System Status")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             db_status = "🟢 Connected" if engine else "🔴 Disconnected"
@@ -982,6 +1123,9 @@ def main():
             telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
             telegram_status = "🟢 Configured" if telegram_token else "🔴 Not Set"
             st.markdown(f"**Telegram:** {telegram_status}")
+        
+        with col4:
+            st.markdown(f"**Schema:** v{schema_health.get('schema_version', 'unknown')}")
 
 
 # =============================================================================
@@ -995,7 +1139,7 @@ def render_sidebar():
         <div style="text-align: center; padding: 1rem 0;">
             <span style="font-size: 2rem;">📊</span>
             <h2 style="margin: 0.5rem 0; font-size: 1.5rem;">Pulse</h2>
-            <p style="color: #a0a0b0; font-size: 0.85rem;">TikTok Analytics</p>
+            <p style="color: #a0a0b0; font-size: 0.85rem;">Analytics Dashboard</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -1034,6 +1178,6 @@ def render_sidebar():
 # =============================================================================
 
 if __name__ == "__main__":
+    logger.info("Starting Pulse Dashboard")
     render_sidebar()
     main()
-

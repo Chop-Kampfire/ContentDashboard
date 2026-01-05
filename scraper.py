@@ -1,5 +1,5 @@
 """
-Pulse - TikTok Analytics Dashboard
+Pulse - Multi-Platform Analytics Dashboard
 Main Scraper Module
 
 Updated for ScrapTik API 2-step process:
@@ -24,7 +24,6 @@ Usage:
 """
 
 import asyncio
-import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from statistics import mean
@@ -43,13 +42,10 @@ from database import (
 )
 from services.tiktok_client import TikTokClient, TikTokProfile, TikTokPost, TikTokAPIError
 from services.telegram_notifier import TelegramNotifier
+from services.logger import get_logger, log_scrape_result, log_viral_alert
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get logger for this module
+logger = get_logger(__name__)
 
 
 class TikTokScraper:

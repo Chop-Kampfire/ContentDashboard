@@ -1,5 +1,5 @@
 """
-Pulse - TikTok Analytics Dashboard
+Pulse - Multi-Platform Analytics Dashboard
 Background Worker
 
 Runs a scheduled job every 6 hours to update all tracked profiles.
@@ -14,10 +14,11 @@ Environment Variables:
     TELEGRAM_BOT_TOKEN - Telegram bot token
     TELEGRAM_CHAT_ID - Telegram chat ID for alerts
     SCRAPE_INTERVAL_HOURS - Update interval (default: 6)
+    LOG_LEVEL - Logging level (default: INFO)
+    SQL_ECHO - Print SQL queries (default: false)
 """
 
 import asyncio
-import logging
 from datetime import datetime
 import signal
 import sys
@@ -26,23 +27,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from config import config
-from database import init_database
+from database.connection import init_database, check_schema_health
 from scraper import update_all_profiles
 from services.telegram_notifier import TelegramNotifier
+from services.logger import get_logger, setup_root_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Suppress noisy loggers
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("apscheduler").setLevel(logging.WARNING)
+# Initialize logging
+setup_root_logger()
+logger = get_logger(__name__)
 
 
 class PulseWorker:
@@ -58,7 +50,7 @@ class PulseWorker:
         
     async def startup(self):
         """Initialize database and start scheduler."""
-        logger.info("🚀 Pulse Worker starting up...")
+        logger.info("Pulse Worker starting up...")
         
         # Validate config
         missing = config.validate()
@@ -69,17 +61,39 @@ class PulseWorker:
         # Initialize database
         try:
             init_database()
-            logger.info("✅ Database connection established")
+            logger.info("Database connection established")
         except Exception as e:
-            logger.error(f"❌ Database connection failed: {e}")
+            logger.error(f"Database connection failed: {e}")
             sys.exit(1)
+        
+        # Check schema health
+        schema_health = check_schema_health()
+        if not schema_health["healthy"]:
+            logger.error(f"Schema health check FAILED: {schema_health}")
+            logger.error(f"Missing columns: {schema_health.get('missing_columns', [])}")
+            logger.error("Run 'python migrate_v002.py' to fix the schema")
+            
+            # Send alert to Telegram
+            try:
+                await self.telegram.send_message(
+                    f"🔴 <b>Pulse Worker Failed to Start</b>\n\n"
+                    f"<b>Reason:</b> Database schema out of date\n"
+                    f"<b>Missing:</b> {', '.join(schema_health.get('missing_columns', []))}\n\n"
+                    f"Run: <code>railway run python migrate_v002.py</code>"
+                )
+            except:
+                pass
+            
+            sys.exit(1)
+        
+        logger.info(f"Schema health check PASSED - version {schema_health.get('schema_version', 'unknown')}")
         
         # Schedule the job
         self.scheduler.add_job(
             self.run_update_job,
             trigger=IntervalTrigger(hours=self.interval_hours),
-            id="tiktok_update",
-            name="Update TikTok Profiles",
+            id="profile_update",
+            name="Update All Profiles",
             replace_existing=True,
             next_run_time=datetime.utcnow()  # Run immediately on startup
         )
@@ -88,8 +102,7 @@ class PulseWorker:
         self.is_running = True
         
         logger.info(
-            f"⏰ Scheduler started. Updates every {self.interval_hours} hours. "
-            f"Next run: NOW"
+            f"Scheduler started | interval={self.interval_hours}h | next_run=NOW"
         )
         
         # Send startup notification
@@ -97,6 +110,7 @@ class PulseWorker:
             await self.telegram.send_message(
                 f"🟢 <b>Pulse Worker Started</b>\n\n"
                 f"Update interval: Every {self.interval_hours} hours\n"
+                f"Schema version: {schema_health.get('schema_version', 'unknown')}\n"
                 f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
             )
         except Exception as e:
@@ -104,7 +118,7 @@ class PulseWorker:
     
     async def shutdown(self):
         """Graceful shutdown."""
-        logger.info("🛑 Shutting down Pulse Worker...")
+        logger.info("Shutting down Pulse Worker...")
         
         self.scheduler.shutdown(wait=False)
         self.is_running = False
@@ -117,12 +131,12 @@ class PulseWorker:
         except:
             pass
         
-        logger.info("👋 Pulse Worker stopped")
+        logger.info("Pulse Worker stopped")
     
     async def run_update_job(self):
         """Execute the profile update job."""
         start_time = datetime.utcnow()
-        logger.info(f"🔄 Starting scheduled update at {start_time}")
+        logger.info(f"Starting scheduled update | time={start_time.isoformat()}")
         
         try:
             results = await update_all_profiles()
@@ -130,9 +144,8 @@ class PulseWorker:
             elapsed = (datetime.utcnow() - start_time).total_seconds()
             
             logger.info(
-                f"✅ Update complete in {elapsed:.1f}s | "
-                f"Success: {results['success']} | "
-                f"Failed: {results['failed']}"
+                f"Update complete | duration={elapsed:.1f}s | "
+                f"success={results['success']} | failed={results['failed']}"
             )
             
             # Send summary if there were failures
@@ -145,7 +158,7 @@ class PulseWorker:
                 )
                 
         except Exception as e:
-            logger.error(f"❌ Update job failed: {e}", exc_info=True)
+            logger.error(f"Update job failed: {e}", exc_info=True)
             
             try:
                 await self.telegram.send_error_alert(
@@ -163,10 +176,14 @@ class PulseWorker:
         loop = asyncio.get_event_loop()
         
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(
-                sig,
-                lambda: asyncio.create_task(self.shutdown())
-            )
+            try:
+                loop.add_signal_handler(
+                    sig,
+                    lambda: asyncio.create_task(self.shutdown())
+                )
+            except NotImplementedError:
+                # Windows doesn't support add_signal_handler
+                pass
         
         # Keep running until shutdown
         while self.is_running:
@@ -175,11 +192,16 @@ class PulseWorker:
 
 async def main():
     """Entry point for the worker."""
+    logger.info("=" * 60)
+    logger.info("PULSE WORKER INITIALIZING")
+    logger.info("=" * 60)
+    
     worker = PulseWorker()
     
     try:
         await worker.run_forever()
     except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt")
         await worker.shutdown()
     except Exception as e:
         logger.error(f"Worker crashed: {e}", exc_info=True)
@@ -189,4 +211,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
