@@ -626,11 +626,29 @@ def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
     # #endregion
     
     try:
+        # #region agent log
+        print(f"[PULSE DEBUG] Creating TikTokScraper instance...", flush=True)
+        # #endregion
         scraper = TikTokScraper()
+        
+        # #region agent log
+        print(f"[PULSE DEBUG] Creating event loop...", flush=True)
+        # #endregion
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        profile = loop.run_until_complete(scraper.add_profile(username, send_notification=True))
-        loop.close()
+        
+        # #region agent log
+        print(f"[PULSE DEBUG] Calling scraper.add_profile() for '{username}'...", flush=True)
+        # #endregion
+        
+        try:
+            profile = loop.run_until_complete(scraper.add_profile(username, send_notification=True))
+            print(f"[PULSE DEBUG] scraper.add_profile() returned successfully!", flush=True)
+        except Exception as scraper_err:
+            print(f"[PULSE DEBUG] scraper.add_profile() FAILED: {type(scraper_err).__name__}: {scraper_err}", flush=True)
+            raise
+        finally:
+            loop.close()
         
         # #region agent log
         _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:after_scraper","message":"Profile returned from scraper","data":{"profile_id":profile.id,"profile_username":profile.username,"is_active":profile.is_active}})
