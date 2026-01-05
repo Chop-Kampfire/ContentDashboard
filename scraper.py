@@ -157,11 +157,13 @@ class TikTokScraper:
             db.commit()
             
             # Capture values BEFORE session closes (fix for detached instance error)
-            # #region agent log
             saved_username = profile.username
             saved_follower_count = profile.follower_count
             saved_id = profile.id
-            import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"A","location":"scraper.py:add_profile:captured_values","message":"Captured values before expunge","data":{"saved_username":saved_username,"saved_id":saved_id},"timestamp":__import__('time').time()*1000})+'\n')
+            saved_is_active = profile.is_active
+            
+            # #region agent log
+            print(f"[DEBUG scraper] Profile saved: id={saved_id}, username={saved_username}, is_active={saved_is_active}")
             # #endregion
             
             logger.info(
@@ -186,7 +188,7 @@ class TikTokScraper:
             db.expunge(profile)
             
             # #region agent log
-            import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"A","location":"scraper.py:add_profile:after_expunge","message":"Profile expunged, returning","data":{"profile_id":profile.id},"timestamp":__import__('time').time()*1000})+'\n')
+            print(f"[DEBUG scraper] Profile expunged, returning profile id={profile.id}")
             # #endregion
             
             return profile

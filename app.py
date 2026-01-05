@@ -278,6 +278,14 @@ def get_all_profiles() -> pd.DataFrame:
     try:
         profiles = session.query(Profile).filter(Profile.is_active == True).all()
         
+        # #region agent log
+        import json, os
+        log_dir = r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor'
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, 'debug.log'), 'a') as f:
+            f.write(json.dumps({"hypothesisId":"I","location":"app.py:get_all_profiles","message":"Queried profiles from DB","data":{"count":len(profiles),"usernames":[p.username for p in profiles]},"timestamp":__import__('time').time()*1000}) + '\n')
+        # #endregion
+        
         data = [{
             "id": p.id,
             "username": p.username,
@@ -599,9 +607,31 @@ def format_number(n: int) -> str:
     return str(n)
 
 
+def _debug_log(data: dict):
+    """Helper to write debug logs with fallback to print."""
+    import json, os, time
+    log_msg = json.dumps({**data, "timestamp": time.time()*1000})
+    
+    # Always print to console (visible in terminal running streamlit)
+    print(f"[DEBUG] {log_msg}")
+    
+    # Try to write to file
+    try:
+        log_dir = r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor'
+        log_file = os.path.join(log_dir, 'debug.log')
+        os.makedirs(log_dir, exist_ok=True)
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(log_msg + '\n')
+    except Exception as e:
+        print(f"[DEBUG LOG ERROR] Failed to write log: {e}")
+
 def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
     """Add a new profile to the watchlist."""
     from scraper import TikTokScraper
+    
+    # #region agent log
+    _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:start","message":"Starting add profile","data":{"username":username}})
+    # #endregion
     
     try:
         scraper = TikTokScraper()
@@ -611,22 +641,33 @@ def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
         loop.close()
         
         # #region agent log
-        import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"C","location":"app.py:add_profile_to_watchlist:post_fix","message":"Profile returned, about to access username","data":{"profile_type":str(type(profile))},"timestamp":__import__('time').time()*1000})+'\n')
+        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:after_scraper","message":"Profile returned from scraper","data":{"profile_id":profile.id,"profile_username":profile.username,"is_active":profile.is_active}})
         # #endregion
         
         # Clear cache to refresh data
         get_all_profiles.clear()
         get_aggregate_stats.clear()
+        get_all_posts.clear()  # Also clear posts cache
         
         # #region agent log
-        result_username = profile.username
-        import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"C","location":"app.py:add_profile_to_watchlist:success","message":"Successfully accessed profile.username after expunge fix","data":{"result_username":result_username},"timestamp":__import__('time').time()*1000})+'\n')
+        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:cache_cleared","message":"All caches cleared"})
         # #endregion
         
-        return True, f"Successfully added @{profile.username}"
+        # Verify data can be fetched immediately
+        # #region agent log
+        fresh_profiles = get_all_profiles()
+        profile_count = len(fresh_profiles)
+        usernames_list = fresh_profiles['username'].tolist() if not fresh_profiles.empty else []
+        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:verify_fetch","message":"Fetched profiles after cache clear","data":{"profile_count":profile_count,"usernames":usernames_list}})
+        print(f"[DEBUG] Fresh profiles count: {profile_count}, usernames: {usernames_list}")
+        # #endregion
+        
+        return True, f"Successfully added @{profile.username} (DB has {profile_count} profiles)"
     except Exception as e:
         # #region agent log
-        import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"C","location":"app.py:add_profile_to_watchlist:error","message":"Exception occurred","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":__import__('time').time()*1000})+'\n')
+        import traceback
+        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:error","message":"Exception occurred","data":{"error":str(e),"error_type":type(e).__name__,"traceback":traceback.format_exc()}})
+        print(f"[DEBUG ERROR] {type(e).__name__}: {e}")
         # #endregion
         return False, f"Error: {str(e)}"
 
