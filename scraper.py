@@ -104,8 +104,18 @@ class TikTokScraper:
             existing = db.query(Profile).filter(Profile.username == username).first()
             if existing:
                 # #region agent log
-                print(f"[PULSE DEBUG] Profile EXISTS (id={existing.id}), redirecting to update_profile()", flush=True)
+                print(f"[PULSE DEBUG] Profile EXISTS (id={existing.id}, is_active={existing.is_active})", flush=True)
                 # #endregion
+                
+                # IMPORTANT: Reactivate if it was soft-deleted
+                if not existing.is_active:
+                    existing.is_active = True
+                    db.commit()
+                    # #region agent log
+                    print(f"[PULSE DEBUG] Profile was INACTIVE - REACTIVATED!", flush=True)
+                    # #endregion
+                    logger.info(f"Profile @{username} reactivated")
+                
                 logger.warning(f"Profile @{username} already exists, updating instead")
                 return await self.update_profile(username)
         
