@@ -5,8 +5,8 @@ echo "=========================================="
 echo "Running database migration..."
 echo "=========================================="
 
-# Run migration
-python migrate_v002.py
+# Run the comprehensive migration from database/migrations
+python -m database.migrations.v002_multiplatform
 
 echo ""
 echo "=========================================="
