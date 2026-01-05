@@ -5,10 +5,9 @@ Version 0.0.2 - Supports TikTok, Twitter/X, and Reddit
 """
 
 from datetime import datetime
-from enum import Enum as PyEnum
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Text, DateTime, 
-    ForeignKey, Float, Boolean, Index, UniqueConstraint, Enum
+    ForeignKey, Float, Boolean, Index, UniqueConstraint
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -17,17 +16,17 @@ Base = declarative_base()
 
 
 # =============================================================================
-# ENUMS
+# PLATFORM CONSTANTS
 # =============================================================================
 
-class PlatformType(PyEnum):
+class Platform:
     """Supported social media platforms."""
     TIKTOK = "tiktok"
     TWITTER = "twitter"
     REDDIT = "reddit"
 
 
-class UserRoleType(PyEnum):
+class UserRole:
     """User roles for analytics categorization."""
     CREATOR = "creator"
     MODERATOR = "moderator"
@@ -49,21 +48,15 @@ class Profile(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     
     # Platform identification
-    platform = Column(
-        Enum(PlatformType, name='platform_type', create_constraint=True),
-        nullable=False,
-        default=PlatformType.TIKTOK,
-        index=True
-    )
+    platform = Column(String(32), nullable=False, default=Platform.TIKTOK, index=True)
     platform_user_id = Column(String(64), nullable=True)  # Platform's internal ID
     username = Column(String(64), nullable=False, index=True)  # @handle
     
+    # Legacy column - kept for backwards compatibility during migration
+    tiktok_user_id = Column(String(64), nullable=True)
+    
     # User categorization
-    user_role = Column(
-        Enum(UserRoleType, name='user_role_type', create_constraint=True),
-        nullable=True,
-        default=UserRoleType.CREATOR
-    )
+    user_role = Column(String(32), nullable=True, default=UserRole.CREATOR)
     
     # Profile info (common across platforms)
     display_name = Column(String(128), nullable=True)
@@ -94,18 +87,8 @@ class Profile(Base):
     posts = relationship("Post", back_populates="profile", cascade="all, delete-orphan")
     history = relationship("ProfileHistory", back_populates="profile", cascade="all, delete-orphan")
 
-    # Constraints and indexes
-    __table_args__ = (
-        # Username is unique per platform (same username can exist on different platforms)
-        UniqueConstraint('username', 'platform', name='uq_profile_username_platform'),
-        # Platform user ID should be unique per platform
-        UniqueConstraint('platform_user_id', 'platform', name='uq_profile_platform_id'),
-        Index('idx_profiles_platform', 'platform'),
-        Index('idx_profiles_active_platform', 'is_active', 'platform'),
-    )
-
     def __repr__(self):
-        return f"<Profile [{self.platform.value}] @{self.username} | {self.follower_count:,} followers>"
+        return f"<Profile [{self.platform}] @{self.username} | {self.follower_count:,} followers>"
 
 
 # =============================================================================
@@ -166,13 +149,11 @@ class Post(Base):
     profile_id = Column(Integer, ForeignKey('profiles.id', ondelete='CASCADE'), nullable=False)
     
     # Platform identification
-    platform = Column(
-        Enum(PlatformType, name='platform_type', create_constraint=True),
-        nullable=False,
-        default=PlatformType.TIKTOK,
-        index=True
-    )
-    platform_post_id = Column(String(64), nullable=False, index=True)  # Platform's post ID
+    platform = Column(String(32), nullable=False, default=Platform.TIKTOK, index=True)
+    platform_post_id = Column(String(64), nullable=True, index=True)  # Platform's post ID
+    
+    # Legacy column - kept for backwards compatibility during migration
+    tiktok_post_id = Column(String(64), nullable=True)
     
     # Content info (common across platforms)
     description = Column(Text, nullable=True)  # Caption/text/title
@@ -210,17 +191,9 @@ class Post(Base):
     # Relationship
     profile = relationship("Profile", back_populates="posts")
 
-    # Constraints and indexes
-    __table_args__ = (
-        # Post ID is unique per platform
-        UniqueConstraint('platform_post_id', 'platform', name='uq_post_platform_id'),
-        Index('idx_posts_profile_posted', 'profile_id', 'posted_at'),
-        Index('idx_posts_viral', 'is_viral', 'viral_alert_sent'),
-        Index('idx_posts_platform', 'platform'),
-    )
-
     def __repr__(self):
-        return f"<Post [{self.platform.value}] {self.platform_post_id} | {self.view_count:,} views>"
+        post_id = self.platform_post_id or self.tiktok_post_id or "unknown"
+        return f"<Post [{self.platform}] {post_id} | {self.view_count:,} views>"
 
 
 # =============================================================================
@@ -276,10 +249,7 @@ class AlertLog(Base):
     profile_id = Column(Integer, ForeignKey('profiles.id', ondelete='SET NULL'), nullable=True)
     
     # Platform for context
-    platform = Column(
-        Enum(PlatformType, name='platform_type', create_constraint=True),
-        nullable=True
-    )
+    platform = Column(String(32), nullable=True)
     
     alert_type = Column(String(32), nullable=False)  # 'viral_post', 'milestone', etc.
     message = Column(Text, nullable=False)
