@@ -920,7 +920,7 @@ def main():
                         success, message = add_profile_to_watchlist(new_username)
                         if success:
                             st.success(message)
-                            st.rerun()
+                            st.toast(f"✅ @{new_username} added! Refresh the page to see updates.", icon="🎉")
                         else:
                             st.error(message)
         
@@ -941,7 +941,7 @@ def main():
                         success, message = remove_profile_from_watchlist(remove_username)
                         if success:
                             st.success(message)
-                            st.rerun()
+                            st.toast(f"🗑️ Profile removed! Refresh the page to see updates.", icon="✅")
                         else:
                             st.error(message)
             else:
