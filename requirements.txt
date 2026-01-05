@@ -1,0 +1,24 @@
+# Pulse - TikTok Analytics Dashboard
+# Python 3.10+
+
+# Web Framework
+streamlit>=1.28.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# HTTP Client
+httpx>=0.25.0
+requests>=2.31.0
+
+# Data & Visualization
+pandas>=2.1.0
+plotly>=5.18.0
+
+# Background Worker
+apscheduler>=3.10.4
+
+# Utilities
+python-dotenv>=1.0.0
+
