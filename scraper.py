@@ -163,7 +163,7 @@ class TikTokScraper:
             saved_is_active = profile.is_active
             
             # #region agent log
-            print(f"[DEBUG scraper] Profile saved: id={saved_id}, username={saved_username}, is_active={saved_is_active}")
+            print(f"[PULSE DEBUG] scraper.add_profile: Profile saved - id={saved_id}, username={saved_username}, is_active={saved_is_active}", flush=True)
             # #endregion
             
             logger.info(
@@ -188,7 +188,7 @@ class TikTokScraper:
             db.expunge(profile)
             
             # #region agent log
-            print(f"[DEBUG scraper] Profile expunged, returning profile id={profile.id}")
+            print(f"[PULSE DEBUG] scraper.add_profile: Profile expunged, returning id={profile.id}", flush=True)
             # #endregion
             
             return profile

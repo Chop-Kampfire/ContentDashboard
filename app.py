@@ -279,11 +279,7 @@ def get_all_profiles() -> pd.DataFrame:
         profiles = session.query(Profile).filter(Profile.is_active == True).all()
         
         # #region agent log
-        import json, os
-        log_dir = r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor'
-        os.makedirs(log_dir, exist_ok=True)
-        with open(os.path.join(log_dir, 'debug.log'), 'a') as f:
-            f.write(json.dumps({"hypothesisId":"I","location":"app.py:get_all_profiles","message":"Queried profiles from DB","data":{"count":len(profiles),"usernames":[p.username for p in profiles]},"timestamp":__import__('time').time()*1000}) + '\n')
+        print(f"[PULSE DEBUG] get_all_profiles: Found {len(profiles)} active profiles: {[p.username for p in profiles]}", flush=True)
         # #endregion
         
         data = [{
@@ -608,22 +604,18 @@ def format_number(n: int) -> str:
 
 
 def _debug_log(data: dict):
-    """Helper to write debug logs with fallback to print."""
-    import json, os, time
+    """Helper to write debug logs - outputs to stdout for Railway logs."""
+    import json, time, sys
     log_msg = json.dumps({**data, "timestamp": time.time()*1000})
     
-    # Always print to console (visible in terminal running streamlit)
-    print(f"[DEBUG] {log_msg}")
+    # Print to stdout with flush (visible in Railway logs)
+    print(f"[PULSE DEBUG] {log_msg}", flush=True)
+    sys.stdout.flush()
     
-    # Try to write to file
-    try:
-        log_dir = r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor'
-        log_file = os.path.join(log_dir, 'debug.log')
-        os.makedirs(log_dir, exist_ok=True)
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(log_msg + '\n')
-    except Exception as e:
-        print(f"[DEBUG LOG ERROR] Failed to write log: {e}")
+    # Also store in session state for UI display
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+    st.session_state.debug_logs.append(data.get('message', log_msg))
 
 def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
     """Add a new profile to the watchlist."""
@@ -659,15 +651,16 @@ def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
         profile_count = len(fresh_profiles)
         usernames_list = fresh_profiles['username'].tolist() if not fresh_profiles.empty else []
         _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:verify_fetch","message":"Fetched profiles after cache clear","data":{"profile_count":profile_count,"usernames":usernames_list}})
-        print(f"[DEBUG] Fresh profiles count: {profile_count}, usernames: {usernames_list}")
+        print(f"[PULSE DEBUG] Verification - Fresh profiles count: {profile_count}, usernames: {usernames_list}", flush=True)
         # #endregion
         
         return True, f"Successfully added @{profile.username} (DB has {profile_count} profiles)"
     except Exception as e:
         # #region agent log
         import traceback
-        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:error","message":"Exception occurred","data":{"error":str(e),"error_type":type(e).__name__,"traceback":traceback.format_exc()}})
-        print(f"[DEBUG ERROR] {type(e).__name__}: {e}")
+        tb = traceback.format_exc()
+        _debug_log({"hypothesisId":"F","location":"app.py:add_profile_to_watchlist:error","message":"Exception occurred","data":{"error":str(e),"error_type":type(e).__name__}})
+        print(f"[PULSE DEBUG ERROR] {type(e).__name__}: {e}\n{tb}", flush=True)
         # #endregion
         return False, f"Error: {str(e)}"
 
