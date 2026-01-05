@@ -2,9 +2,13 @@
 Pulse - TikTok Analytics Dashboard
 Main Scraper Module
 
+Updated for ScrapTik API 2-step process:
+1. Fetch profile (gets user_id) OR use cached user_id
+2. Fetch posts using user_id (NOT username)
+
 This module orchestrates:
 1. Fetching TikTok profile and post data via RapidAPI
-2. Upserting data into PostgreSQL
+2. Upserting data into PostgreSQL (saves user_id for efficiency)
 3. Detecting viral posts (views > 5x average)
 4. Sending Telegram alerts for viral content
 
@@ -51,6 +55,10 @@ logger = logging.getLogger(__name__)
 class TikTokScraper:
     """
     Main scraper class that coordinates data fetching, storage, and alerts.
+    
+    Uses ScrapTik 2-step process:
+    1. Get profile (extracts user_id) 
+    2. Fetch posts by user_id (saves API calls by caching user_id)
     """
     
     def __init__(self):
@@ -66,7 +74,11 @@ class TikTokScraper:
     async def add_profile(self, username: str, send_notification: bool = True) -> Profile:
         """
         Add a new TikTok profile to the watchlist.
-        Fetches initial profile data and recent posts.
+        
+        Process:
+        1. Fetch profile data (gets user_id)
+        2. Fetch posts using user_id
+        3. Save all data including user_id for future efficiency
         
         Args:
             username: TikTok handle (without @)
@@ -85,14 +97,20 @@ class TikTokScraper:
                 logger.warning(f"Profile @{username} already exists, updating instead")
                 return await self.update_profile(username)
         
-        # Fetch from TikTok API
+        # Step 1: Fetch profile (gets user_id)
         try:
             profile_data = await self.tiktok.fetch_profile(username)
-            posts_data = await self.tiktok.fetch_recent_posts(
-                username,
+            user_id = profile_data.user_id
+            
+            logger.info(f"📋 Got profile for @{username}, user_id: {user_id}")
+            
+            # Step 2: Fetch posts using user_id (correct ScrapTik method)
+            posts_data = await self.tiktok.fetch_recent_posts_by_id(
+                user_id=user_id,
                 max_posts=50,
                 days_back=self.lookback_days
             )
+            
         except TikTokAPIError as e:
             logger.error(f"❌ Failed to fetch @{username}: {e}")
             raise
@@ -100,11 +118,10 @@ class TikTokScraper:
         # Calculate average views
         avg_views = self._calculate_average_views(posts_data)
         
-        # Save to database
+        # Save to database (including user_id for future use)
         with get_db_context() as db:
-            # Create profile
             profile = Profile(
-                tiktok_user_id=profile_data.user_id,
+                tiktok_user_id=user_id,  # IMPORTANT: Save user_id
                 username=profile_data.username,
                 display_name=profile_data.display_name,
                 bio=profile_data.bio,
@@ -141,6 +158,7 @@ class TikTokScraper:
             
             logger.info(
                 f"✅ Added @{username} | "
+                f"user_id: {user_id} | "
                 f"{profile.follower_count:,} followers | "
                 f"{len(posts_data)} posts | "
                 f"Avg views: {avg_views:,.0f}"
@@ -161,7 +179,8 @@ class TikTokScraper:
     async def update_profile(self, username: str) -> Optional[Profile]:
         """
         Update an existing profile with fresh data from TikTok.
-        Checks for viral posts and sends alerts.
+        
+        Uses cached user_id from database to skip username-to-id conversion.
         
         Args:
             username: TikTok handle (without @)
@@ -172,7 +191,7 @@ class TikTokScraper:
         username = username.lstrip("@").strip().lower()
         logger.info(f"🔄 Updating profile: @{username}")
         
-        # Get existing profile
+        # Get existing profile with cached user_id
         with get_db_context() as db:
             profile = db.query(Profile).filter(Profile.username == username).first()
             if not profile:
@@ -180,18 +199,32 @@ class TikTokScraper:
                 return None
             
             profile_id = profile.id
+            cached_user_id = profile.tiktok_user_id  # Use cached user_id!
             old_follower_count = profile.follower_count
             old_likes = profile.total_likes
             old_avg_views = profile.average_post_views
         
         # Fetch fresh data
         try:
+            # Step 1: Fetch profile (also updates user_id if it changed)
             profile_data = await self.tiktok.fetch_profile(username)
-            posts_data = await self.tiktok.fetch_recent_posts(
-                username,
+            user_id = profile_data.user_id
+            
+            # Step 2: Fetch posts using user_id
+            # Use cached user_id if available, otherwise use the one from profile fetch
+            effective_user_id = cached_user_id or user_id
+            
+            if cached_user_id:
+                logger.info(f"Using cached user_id for @{username}: {cached_user_id}")
+            else:
+                logger.info(f"No cached user_id, using fetched: {user_id}")
+            
+            posts_data = await self.tiktok.fetch_recent_posts_by_id(
+                user_id=effective_user_id,
                 max_posts=50,
                 days_back=self.lookback_days
             )
+            
         except TikTokAPIError as e:
             logger.error(f"❌ Failed to update @{username}: {e}")
             return None
@@ -202,8 +235,8 @@ class TikTokScraper:
         with get_db_context() as db:
             profile = db.query(Profile).filter(Profile.id == profile_id).first()
             
-            # Update profile metrics
-            profile.tiktok_user_id = profile_data.user_id
+            # Update profile metrics (including user_id in case it changed)
+            profile.tiktok_user_id = user_id  # Always update to latest
             profile.display_name = profile_data.display_name
             profile.bio = profile_data.bio
             profile.avatar_url = profile_data.avatar_url
@@ -252,9 +285,120 @@ class TikTokScraper:
             
             return profile
     
+    async def update_profile_by_id(self, profile_id: int) -> Optional[Profile]:
+        """
+        Update a profile using database ID and cached user_id.
+        
+        More efficient for bulk updates as it uses saved user_id directly.
+        
+        Args:
+            profile_id: Database profile ID
+            
+        Returns:
+            Updated Profile object or None if not found
+        """
+        # Get profile with cached data
+        with get_db_context() as db:
+            profile = db.query(Profile).filter(Profile.id == profile_id).first()
+            if not profile:
+                logger.warning(f"Profile ID {profile_id} not found")
+                return None
+            
+            username = profile.username
+            cached_user_id = profile.tiktok_user_id
+            old_follower_count = profile.follower_count
+            old_likes = profile.total_likes
+            old_avg_views = profile.average_post_views
+        
+        logger.info(f"🔄 Updating profile: @{username} (ID: {profile_id})")
+        
+        try:
+            # Fetch fresh profile data
+            profile_data = await self.tiktok.fetch_profile(username)
+            
+            # Use cached user_id for posts (skip username-to-id conversion!)
+            if cached_user_id:
+                logger.info(f"📦 Using cached user_id: {cached_user_id}")
+                posts_data = await self.tiktok.fetch_recent_posts_by_id(
+                    user_id=cached_user_id,
+                    max_posts=50,
+                    days_back=self.lookback_days
+                )
+            else:
+                # No cached ID, need to do full 2-step process
+                logger.info(f"⚠️ No cached user_id, fetching with username")
+                posts_data, new_user_id = await self.tiktok.fetch_recent_posts(
+                    username=username,
+                    max_posts=50,
+                    days_back=self.lookback_days
+                )
+                cached_user_id = new_user_id
+                
+        except TikTokAPIError as e:
+            logger.error(f"❌ Failed to update @{username}: {e}")
+            return None
+        
+        # Calculate new average
+        new_avg_views = self._calculate_average_views(posts_data)
+        
+        with get_db_context() as db:
+            profile = db.query(Profile).filter(Profile.id == profile_id).first()
+            
+            # Update all fields
+            profile.tiktok_user_id = cached_user_id or profile_data.user_id
+            profile.display_name = profile_data.display_name
+            profile.bio = profile_data.bio
+            profile.avatar_url = profile_data.avatar_url
+            profile.follower_count = profile_data.follower_count
+            profile.following_count = profile_data.following_count
+            profile.total_likes = profile_data.total_likes
+            profile.video_count = profile_data.video_count
+            profile.average_post_views = new_avg_views
+            profile.last_scraped_at = datetime.utcnow()
+            
+            # History snapshot
+            history = ProfileHistory(
+                profile_id=profile.id,
+                follower_count=profile.follower_count,
+                following_count=profile.following_count,
+                total_likes=profile.total_likes,
+                video_count=profile.video_count,
+                follower_change=profile.follower_count - old_follower_count,
+                likes_change=profile.total_likes - old_likes,
+                recorded_at=datetime.utcnow()
+            )
+            db.add(history)
+            
+            # UPSERT posts
+            viral_posts = []
+            for post_data in posts_data:
+                is_new, is_viral, post = await self._upsert_post(
+                    db, profile.id, post_data, old_avg_views
+                )
+                if is_viral:
+                    viral_posts.append((post_data, post))
+            
+            db.commit()
+            
+            logger.info(
+                f"✅ Updated @{username} | "
+                f"Followers: {profile.follower_count:,} ({profile.follower_count - old_follower_count:+,}) | "
+                f"Viral: {len(viral_posts)}"
+            )
+            
+            # Send viral alerts
+            for post_data, post_record in viral_posts:
+                await self._send_viral_alert(
+                    db, profile, post_data, post_record, old_avg_views
+                )
+            
+            return profile
+    
     async def update_all_profiles(self) -> dict:
         """
         Update all active profiles in the watchlist.
+        
+        Uses cached user_ids for efficiency (saves 1 API call per profile).
         Called by the background worker every 6 hours.
         
         Returns:
@@ -262,15 +406,22 @@ class TikTokScraper:
         """
         logger.info("🔄 Starting bulk update for all profiles...")
         
+        # Get all active profile IDs and usernames
         with get_db_context() as db:
             profiles = db.query(Profile).filter(Profile.is_active == True).all()
-            usernames = [p.username for p in profiles]
+            profile_data = [(p.id, p.username, p.tiktok_user_id) for p in profiles]
         
         results = {"success": 0, "failed": 0, "viral_alerts": 0}
         
-        for username in usernames:
+        for profile_id, username, user_id in profile_data:
             try:
-                await self.update_profile(username)
+                if user_id:
+                    # Use efficient method with cached user_id
+                    await self.update_profile_by_id(profile_id)
+                else:
+                    # Fallback to username-based update
+                    await self.update_profile(username)
+                    
                 results["success"] += 1
             except Exception as e:
                 logger.error(f"Failed to update @{username}: {e}")
@@ -523,4 +674,3 @@ if __name__ == "__main__":
             print(f"Unknown command: {command}")
     
     asyncio.run(main())
-

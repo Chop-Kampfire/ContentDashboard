@@ -1,13 +1,12 @@
 """
 Pulse - TikTok Analytics Dashboard
-TikTok RapidAPI Client
+TikTok RapidAPI Client (Async)
 
-Assumed API: "TikTok All In One" (tiktok-all-in-one.p.rapidapi.com)
-Alternative: "Scraptik" or "TikTok Scraper" - adjust endpoints as needed.
+Updated for ScrapTik API with correct 2-step process:
+1. /username-to-id - Convert username to numeric user_id
+2. /user-posts - Fetch posts using user_id (NOT username)
 
-API Documentation Reference:
-- GET /user/info - Get user profile by username
-- GET /user/posts - Get user's recent posts
+API Documentation: https://rapidapi.com/scraptik-api-scraptik-api-default/api/scraptik
 """
 
 import httpx
@@ -59,43 +58,20 @@ class TikTokClient:
     """
     TikTok RapidAPI client for fetching profile and post data.
     
-    Supports multiple RapidAPI TikTok providers with configurable endpoints.
-    Default: "TikTok All In One" API
+    Optimized for ScrapTik API with 2-step post fetching process.
     
     Usage:
         client = TikTokClient()
+        
+        # Get profile (also returns user_id)
         profile = await client.fetch_profile("username")
+        
+        # Fetch posts using user_id (more efficient)
+        posts = await client.fetch_recent_posts_by_id(profile.user_id)
+        
+        # Or use username (will auto-convert)
         posts = await client.fetch_recent_posts("username")
     """
-    
-    # =========================================================================
-    # API ENDPOINT CONFIGURATION
-    # Adjust these based on your specific RapidAPI TikTok provider
-    # =========================================================================
-    
-    # Option 1: TikTok All In One
-    ENDPOINTS = {
-        "tiktok-all-in-one.p.rapidapi.com": {
-            "profile": "/user/info",
-            "posts": "/user/posts",
-            "profile_param": "username",
-            "posts_param": "username",
-        },
-        # Option 2: Scraptik API (alternative)
-        "scraptik.p.rapidapi.com": {
-            "profile": "/get-user",
-            "posts": "/get-user-posts", 
-            "profile_param": "username",
-            "posts_param": "username",
-        },
-        # Option 3: TikTok Scraper API
-        "tiktok-scraper7.p.rapidapi.com": {
-            "profile": "/user/info",
-            "posts": "/user/posts",
-            "profile_param": "unique_id",
-            "posts_param": "unique_id",
-        }
-    }
     
     def __init__(
         self,
@@ -105,12 +81,6 @@ class TikTokClient:
         self.api_key = api_key or config.RAPIDAPI_KEY
         self.api_host = api_host or config.RAPIDAPI_HOST
         self.base_url = f"https://{self.api_host}"
-        
-        # Get endpoint config for this host
-        self.endpoints = self.ENDPOINTS.get(
-            self.api_host,
-            self.ENDPOINTS["tiktok-all-in-one.p.rapidapi.com"]
-        )
         
         self.headers = {
             "X-RapidAPI-Key": self.api_key,
@@ -136,8 +106,10 @@ class TikTokClient:
                     timeout=timeout
                 )
                 
-                # Log for debugging
                 logger.debug(f"API Request: {url} | Status: {response.status_code}")
+                
+                if response.status_code == 404:
+                    raise TikTokAPIError(f"Endpoint not found: {endpoint}")
                 
                 if response.status_code == 429:
                     raise TikTokAPIError("Rate limit exceeded. Please wait before retrying.")
@@ -157,6 +129,48 @@ class TikTokClient:
             except httpx.HTTPError as e:
                 raise TikTokAPIError(f"HTTP error: {str(e)}")
     
+    # =========================================================================
+    # STEP 1: USERNAME TO USER ID
+    # =========================================================================
+    
+    async def username_to_id(self, username: str) -> str:
+        """
+        Convert a TikTok username to numeric user_id.
+        
+        Args:
+            username: TikTok handle (without @)
+            
+        Returns:
+            str: Numeric TikTok user_id
+        """
+        username = username.lstrip("@").strip().lower()
+        
+        logger.info(f"Converting @{username} to user_id...")
+        
+        data = await self._make_request("/username-to-id", {"username": username})
+        
+        # Extract user_id from response
+        user_id = (
+            data.get("user_id") or 
+            data.get("uid") or 
+            data.get("id") or
+            data.get("user", {}).get("id") or
+            data.get("user", {}).get("uid") or
+            data.get("data", {}).get("user_id")
+        )
+        
+        if not user_id:
+            raise TikTokAPIError(f"Could not extract user_id for @{username}")
+        
+        user_id = str(user_id)
+        logger.info(f"✅ @{username} → user_id: {user_id}")
+        
+        return user_id
+    
+    # =========================================================================
+    # FETCH PROFILE
+    # =========================================================================
+    
     async def fetch_profile(self, username: str) -> TikTokProfile:
         """
         Fetch TikTok profile data by username.
@@ -165,118 +179,125 @@ class TikTokClient:
             username: TikTok handle (without @)
             
         Returns:
-            TikTokProfile dataclass with user info
-            
-        Raises:
-            TikTokAPIError: If API request fails
+            TikTokProfile dataclass with user info (includes user_id)
         """
-        # Remove @ if present
         username = username.lstrip("@").strip().lower()
         
-        endpoint = self.endpoints["profile"]
-        param_name = self.endpoints["profile_param"]
-        
-        data = await self._make_request(endpoint, {param_name: username})
-        
-        # =====================================================================
-        # RESPONSE PARSING
-        # Adjust based on your API's actual response structure
-        # =====================================================================
-        
-        # Common response structures to handle:
-        # 1. { "data": { "user": {...} } }
-        # 2. { "userInfo": { "user": {...}, "stats": {...} } }
-        # 3. { "user": {...} }
+        data = await self._make_request("/get-user", {"username": username})
         
         try:
-            # Try different response structures
-            if "data" in data:
-                user_data = data["data"].get("user", data["data"])
-                stats_data = data["data"].get("stats", user_data)
-            elif "userInfo" in data:
-                user_data = data["userInfo"].get("user", {})
-                stats_data = data["userInfo"].get("stats", {})
-            elif "user" in data:
-                user_data = data["user"]
-                stats_data = data.get("stats", user_data)
-            else:
-                user_data = data
-                stats_data = data
+            user = data.get("user", data)
+            
+            # Extract avatar URL
+            avatar_url = ""
+            avatar_data = user.get("avatar_larger", user.get("avatarLarger", {}))
+            if isinstance(avatar_data, dict):
+                url_list = avatar_data.get("url_list", [])
+                avatar_url = url_list[0] if url_list else ""
+            elif isinstance(avatar_data, str):
+                avatar_url = avatar_data
             
             return TikTokProfile(
-                user_id=str(user_data.get("id", user_data.get("uid", ""))),
-                username=user_data.get("uniqueId", user_data.get("unique_id", username)),
-                display_name=user_data.get("nickname", user_data.get("nickName", "")),
-                bio=user_data.get("signature", user_data.get("bio", "")),
-                avatar_url=user_data.get("avatarLarger", user_data.get("avatar", "")),
-                follower_count=int(stats_data.get("followerCount", stats_data.get("followers", 0))),
-                following_count=int(stats_data.get("followingCount", stats_data.get("following", 0))),
-                total_likes=int(stats_data.get("heartCount", stats_data.get("likes", stats_data.get("heart", 0)))),
-                video_count=int(stats_data.get("videoCount", stats_data.get("videos", 0)))
+                user_id=str(user.get("uid", user.get("id", user.get("user_id", "")))),
+                username=user.get("unique_id", user.get("uniqueId", username)),
+                display_name=user.get("nickname", ""),
+                bio=user.get("signature", ""),
+                avatar_url=avatar_url,
+                follower_count=int(user.get("follower_count", user.get("followerCount", 0))),
+                following_count=int(user.get("following_count", user.get("followingCount", 0))),
+                total_likes=int(user.get("total_favorited", user.get("heartCount", user.get("heart", 0)))),
+                video_count=int(user.get("aweme_count", user.get("videoCount", 0)))
             )
             
         except (KeyError, TypeError) as e:
             logger.error(f"Failed to parse profile response: {e}")
-            logger.debug(f"Raw response: {data}")
             raise TikTokAPIError(f"Failed to parse profile data for @{username}")
     
-    async def fetch_recent_posts(
+    # =========================================================================
+    # STEP 2: FETCH POSTS BY USER ID
+    # =========================================================================
+    
+    async def fetch_recent_posts_by_id(
         self,
-        username: str,
-        max_posts: int = 50,
+        user_id: str,
+        max_posts: int = 30,
         days_back: int = 30
     ) -> list[TikTokPost]:
         """
-        Fetch recent posts from a TikTok profile.
+        Fetch recent posts using numeric user_id.
+        
+        This is the correct method for ScrapTik API.
         
         Args:
-            username: TikTok handle (without @)
+            user_id: Numeric TikTok user ID
             max_posts: Maximum number of posts to fetch
             days_back: Only include posts from last N days
             
         Returns:
             List of TikTokPost dataclasses
+        """
+        params = {
+            "user_id": str(user_id),
+            "count": min(max_posts, 35)  # ScrapTik max
+        }
+        
+        data = await self._make_request("/user-posts", params)
+        
+        return self._parse_posts_response(data, days_back)
+    
+    async def fetch_recent_posts(
+        self,
+        username: str,
+        max_posts: int = 30,
+        days_back: int = 30,
+        cached_user_id: Optional[str] = None
+    ) -> tuple[list[TikTokPost], str]:
+        """
+        Fetch recent posts with automatic username-to-id conversion.
+        
+        Args:
+            username: TikTok handle (without @)
+            max_posts: Maximum number of posts to fetch
+            days_back: Only include posts from last N days
+            cached_user_id: Optional cached user_id to skip conversion
             
-        Raises:
-            TikTokAPIError: If API request fails
+        Returns:
+            Tuple of (posts_list, user_id) - save user_id for efficiency
         """
         username = username.lstrip("@").strip().lower()
         
-        endpoint = self.endpoints["posts"]
-        param_name = self.endpoints["posts_param"]
+        # Use cached user_id or convert
+        if cached_user_id:
+            user_id = cached_user_id
+            logger.info(f"Using cached user_id for @{username}: {user_id}")
+        else:
+            user_id = await self.username_to_id(username)
         
-        # Request more posts than needed to filter by date
-        params = {
-            param_name: username,
-            "count": max_posts
-        }
+        posts = await self.fetch_recent_posts_by_id(user_id, max_posts, days_back)
         
-        data = await self._make_request(endpoint, params)
+        return posts, user_id
+    
+    def _parse_posts_response(self, data: dict, days_back: int = 30) -> list[TikTokPost]:
+        """Parse posts from API response."""
         
-        # =====================================================================
-        # RESPONSE PARSING - Posts
-        # =====================================================================
+        posts_list = (
+            data.get("aweme_list") or
+            data.get("itemList") or
+            data.get("videos") or
+            data.get("data", {}).get("aweme_list") or
+            []
+        )
         
-        try:
-            # Try different response structures
-            if "data" in data:
-                posts_list = data["data"].get("videos", data["data"].get("itemList", data["data"]))
-            elif "itemList" in data:
-                posts_list = data["itemList"]
-            elif "videos" in data:
-                posts_list = data["videos"]
-            else:
-                posts_list = data if isinstance(data, list) else []
-            
-            if not isinstance(posts_list, list):
-                posts_list = [posts_list] if posts_list else []
-            
-            cutoff_date = datetime.utcnow() - timedelta(days=days_back)
-            posts = []
-            
-            for item in posts_list:
+        if not isinstance(posts_list, list):
+            posts_list = []
+        
+        cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+        posts = []
+        
+        for item in posts_list:
+            try:
                 # Parse timestamp
-                create_time = item.get("createTime", item.get("create_time", 0))
+                create_time = item.get("create_time", item.get("createTime", 0))
                 if isinstance(create_time, str):
                     try:
                         posted_at = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
@@ -289,64 +310,63 @@ class TikTokClient:
                 if posted_at < cutoff_date:
                     continue
                 
-                # Extract stats (different API structures)
-                stats = item.get("stats", item.get("statistics", item))
+                # Extract stats
+                stats = item.get("statistics", item.get("stats", {}))
                 
                 post = TikTokPost(
-                    post_id=str(item.get("id", item.get("video_id", item.get("aweme_id", "")))),
-                    description=item.get("desc", item.get("description", item.get("title", ""))),
+                    post_id=str(item.get("aweme_id", item.get("id", ""))),
+                    description=item.get("desc", item.get("description", "")),
                     video_url=self._extract_video_url(item),
                     thumbnail_url=self._extract_thumbnail(item),
-                    duration_seconds=int(item.get("duration", item.get("video", {}).get("duration", 0))),
-                    view_count=int(stats.get("playCount", stats.get("play_count", stats.get("views", 0)))),
-                    like_count=int(stats.get("diggCount", stats.get("likes", stats.get("like_count", 0)))),
-                    comment_count=int(stats.get("commentCount", stats.get("comments", stats.get("comment_count", 0)))),
-                    share_count=int(stats.get("shareCount", stats.get("shares", stats.get("share_count", 0)))),
+                    duration_seconds=int(item.get("duration", 0)),
+                    view_count=int(stats.get("play_count", stats.get("playCount", 0))),
+                    like_count=int(stats.get("digg_count", stats.get("diggCount", 0))),
+                    comment_count=int(stats.get("comment_count", stats.get("commentCount", 0))),
+                    share_count=int(stats.get("share_count", stats.get("shareCount", 0))),
                     posted_at=posted_at
                 )
                 
                 posts.append(post)
-            
-            # Sort by posted date (newest first)
-            posts.sort(key=lambda p: p.posted_at, reverse=True)
-            
-            logger.info(f"Fetched {len(posts)} posts for @{username} (last {days_back} days)")
-            return posts
-            
-        except (KeyError, TypeError) as e:
-            logger.error(f"Failed to parse posts response: {e}")
-            logger.debug(f"Raw response: {data}")
-            raise TikTokAPIError(f"Failed to parse posts for @{username}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse post: {e}")
+                continue
+        
+        # Sort by posted date (newest first)
+        posts.sort(key=lambda p: p.posted_at, reverse=True)
+        
+        logger.info(f"Parsed {len(posts)} posts (last {days_back} days)")
+        return posts
     
     def _extract_video_url(self, item: dict) -> str:
-        """Extract video URL from various response formats."""
-        # Try different paths
-        if "video" in item:
-            video = item["video"]
-            return (
-                video.get("playAddr", "") or
-                video.get("downloadAddr", "") or
-                video.get("play_addr", {}).get("url_list", [""])[0]
-            )
-        return item.get("video_url", item.get("play_url", ""))
+        """Extract video URL from post data."""
+        video = item.get("video", {})
+        if isinstance(video, dict):
+            play_addr = video.get("play_addr", {})
+            if isinstance(play_addr, dict):
+                url_list = play_addr.get("url_list", [])
+                if url_list:
+                    return url_list[0]
+            return video.get("playAddr", "")
+        return ""
     
     def _extract_thumbnail(self, item: dict) -> str:
-        """Extract thumbnail URL from various response formats."""
-        if "video" in item:
-            video = item["video"]
-            return (
-                video.get("cover", "") or
-                video.get("originCover", "") or
-                video.get("dynamicCover", "")
-            )
-        return item.get("thumbnail", item.get("cover_url", ""))
+        """Extract thumbnail URL from post data."""
+        video = item.get("video", {})
+        if isinstance(video, dict):
+            cover = video.get("cover", video.get("origin_cover", {}))
+            if isinstance(cover, dict):
+                url_list = cover.get("url_list", [])
+                if url_list:
+                    return url_list[0]
+            elif isinstance(cover, str):
+                return cover
+        return ""
     
     async def health_check(self) -> bool:
         """Test API connectivity."""
         try:
-            # Try to fetch a known public profile
             await self.fetch_profile("tiktok")
             return True
         except TikTokAPIError:
             return False
-
