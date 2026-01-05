@@ -156,6 +156,14 @@ class TikTokScraper:
             
             db.commit()
             
+            # Capture values BEFORE session closes (fix for detached instance error)
+            # #region agent log
+            saved_username = profile.username
+            saved_follower_count = profile.follower_count
+            saved_id = profile.id
+            import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"A","location":"scraper.py:add_profile:captured_values","message":"Captured values before expunge","data":{"saved_username":saved_username,"saved_id":saved_id},"timestamp":__import__('time').time()*1000})+'\n')
+            # #endregion
+            
             logger.info(
                 f"✅ Added @{username} | "
                 f"user_id: {user_id} | "
@@ -168,11 +176,18 @@ class TikTokScraper:
             if send_notification:
                 try:
                     await self.telegram.send_welcome_alert(
-                        username=profile.username,
-                        follower_count=profile.follower_count
+                        username=saved_username,  # Use captured value
+                        follower_count=saved_follower_count  # Use captured value
                     )
                 except Exception as e:
                     logger.warning(f"Failed to send welcome notification: {e}")
+            
+            # Expunge the profile from session so it can be used after context closes
+            db.expunge(profile)
+            
+            # #region agent log
+            import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"A","location":"scraper.py:add_profile:after_expunge","message":"Profile expunged, returning","data":{"profile_id":profile.id},"timestamp":__import__('time').time()*1000})+'\n')
+            # #endregion
             
             return profile
     
@@ -283,6 +298,9 @@ class TikTokScraper:
                     db, profile, post_data, post_record, old_avg_views
                 )
             
+            # Expunge profile so it can be accessed after session closes
+            db.expunge(profile)
+            
             return profile
     
     async def update_profile_by_id(self, profile_id: int) -> Optional[Profile]:
@@ -391,6 +409,9 @@ class TikTokScraper:
                 await self._send_viral_alert(
                     db, profile, post_data, post_record, old_avg_views
                 )
+            
+            # Expunge profile so it can be accessed after session closes
+            db.expunge(profile)
             
             return profile
     

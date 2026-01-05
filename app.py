@@ -610,12 +610,24 @@ def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
         profile = loop.run_until_complete(scraper.add_profile(username, send_notification=True))
         loop.close()
         
+        # #region agent log
+        import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"C","location":"app.py:add_profile_to_watchlist:post_fix","message":"Profile returned, about to access username","data":{"profile_type":str(type(profile))},"timestamp":__import__('time').time()*1000})+'\n')
+        # #endregion
+        
         # Clear cache to refresh data
         get_all_profiles.clear()
         get_aggregate_stats.clear()
         
+        # #region agent log
+        result_username = profile.username
+        import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"C","location":"app.py:add_profile_to_watchlist:success","message":"Successfully accessed profile.username after expunge fix","data":{"result_username":result_username},"timestamp":__import__('time').time()*1000})+'\n')
+        # #endregion
+        
         return True, f"Successfully added @{profile.username}"
     except Exception as e:
+        # #region agent log
+        import json; open(r'c:\Users\tyron\OneDrive\Documents\Kampfire Vibez\ContentDashboard\.cursor\debug.log','a').write(json.dumps({"hypothesisId":"C","location":"app.py:add_profile_to_watchlist:error","message":"Exception occurred","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":__import__('time').time()*1000})+'\n')
+        # #endregion
         return False, f"Error: {str(e)}"
 
 
