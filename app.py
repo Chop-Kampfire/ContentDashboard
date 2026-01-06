@@ -8,6 +8,7 @@ Automatic database migrations on Railway deployment.
 """
 
 import os
+import time
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
@@ -466,7 +467,8 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
         posts = session.query(Post, Profile).join(
             Profile, Post.profile_id == Profile.id
         ).filter(
-            Post.posted_at >= cutoff
+            Post.posted_at >= cutoff,
+            Post.view_count > 0  # Filter out posts with zero views
         ).order_by(desc(Post.view_count)).all()
 
         data = []
@@ -1270,6 +1272,55 @@ def main():
         
         with col4:
             st.markdown(f"**Schema:** v{schema_health.get('schema_version', 'unknown')}")
+
+        # Danger Zone - Database Reset
+        st.markdown("---")
+        st.markdown("#### ⚠️ Danger Zone")
+
+        with st.expander("🗑️ Reset Database (Delete All Data)", expanded=False):
+            st.warning(
+                "**WARNING:** This will permanently delete ALL data:\n"
+                "- All tracked profiles\n"
+                "- All posts and performance metrics\n"
+                "- All historical data\n"
+                "- All alert logs\n\n"
+                "The database schema will be preserved. Use this to start fresh after fixing data issues."
+            )
+
+            col_a, col_b = st.columns([3, 1])
+
+            with col_a:
+                confirm_text = st.text_input(
+                    "Type 'DELETE ALL DATA' to confirm",
+                    key="reset_confirm",
+                    placeholder="DELETE ALL DATA"
+                )
+
+            with col_b:
+                st.write("")  # Spacing
+                st.write("")  # Spacing
+                reset_button = st.button(
+                    "🗑️ Reset",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=(confirm_text != "DELETE ALL DATA")
+                )
+
+            if reset_button and confirm_text == "DELETE ALL DATA":
+                with st.spinner("Deleting all data from database..."):
+                    try:
+                        from database.reset_database import reset_all_data
+                        success = reset_all_data(confirm=True)
+
+                        if success:
+                            st.success("✅ Database reset complete! All data deleted. Page will reload in 3 seconds...")
+                            time.sleep(3)
+                            st.rerun()
+                        else:
+                            st.error("❌ Database reset failed. Check logs for details.")
+                    except Exception as e:
+                        st.error(f"❌ Database reset failed: {e}")
+                        logger.error(f"Reset failed: {e}")
 
 
 # =============================================================================
