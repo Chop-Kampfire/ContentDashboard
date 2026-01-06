@@ -125,53 +125,86 @@ def get_db_context():
 
 def check_schema_health() -> dict:
     """
-    Perform a health check on the database schema.
-    Returns a dict with status and any missing columns.
-    
+    Perform a comprehensive health check on the database schema.
+    Returns a dict with status, missing columns, and detected schema version.
+
     Usage:
         health = check_schema_health()
         if not health['healthy']:
             print(f"Missing columns: {health['missing_columns']}")
+            print(f"Schema version: {health['schema_version']}")
     """
     if engine is None:
         init_database()
-    
+
     result = {
         "healthy": True,
         "missing_columns": [],
-        "error": None
+        "error": None,
+        "schema_version": "unknown"
     }
-    
-    # Required columns for v0.0.2
+
+    # Required columns for v0.0.2 (comprehensive check)
     required_columns = {
-        "profiles": ["platform", "platform_user_id", "user_role"],
-        "posts": ["platform", "upvote_ratio", "is_crosspost", "retweet_count", "quote_count"]
+        "profiles": [
+            "platform", "platform_user_id", "user_role",
+            "subreddit_name", "subreddit_subscribers", "active_users"
+        ],
+        "posts": [
+            "platform", "upvote_ratio", "is_crosspost", "original_subreddit",
+            "reddit_score", "retweet_count", "quote_count", "bookmark_count",
+            "impression_count"
+        ],
+        "profile_history": ["subreddit_subscribers", "active_users"],
+        "post_history": ["retweet_count", "quote_count", "upvote_ratio", "reddit_score"],
+        "alert_logs": ["platform"]
     }
-    
+
     try:
         with engine.connect() as conn:
+            # First, detect schema version
+            platform_check = conn.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'profiles' AND column_name = 'platform'
+            """))
+
+            if platform_check.fetchone():
+                result["schema_version"] = "0.0.2"
+            else:
+                # Check for v0.0.1 (basic TikTok schema)
+                tiktok_check = conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'profiles' AND column_name = 'tiktok_user_id'
+                """))
+                if tiktok_check.fetchone():
+                    result["schema_version"] = "0.0.1"
+
+            # Now check for all required columns
             for table, columns in required_columns.items():
                 for column in columns:
                     check = conn.execute(text("""
-                        SELECT column_name 
-                        FROM information_schema.columns 
+                        SELECT column_name
+                        FROM information_schema.columns
                         WHERE table_name = :table AND column_name = :column
                     """), {"table": table, "column": column})
-                    
+
                     if check.fetchone() is None:
                         result["missing_columns"].append(f"{table}.{column}")
                         result["healthy"] = False
-        
+
         if result["missing_columns"]:
             logger.error(f"Schema health check FAILED - missing: {result['missing_columns']}")
+            logger.error(f"Detected schema version: {result['schema_version']}")
         else:
-            logger.info("Schema health check PASSED")
-            
+            logger.info(f"Schema health check PASSED - version {result['schema_version']}")
+
     except (OperationalError, ProgrammingError) as e:
         result["healthy"] = False
         result["error"] = str(e)
         logger.error(f"Schema health check ERROR: {e}")
-    
+
     return result
 
 

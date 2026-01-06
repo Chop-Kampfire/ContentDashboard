@@ -69,24 +69,39 @@ class PulseWorker:
         # Check schema health
         schema_health = check_schema_health()
         if not schema_health["healthy"]:
-            logger.error(f"Schema health check FAILED: {schema_health}")
-            logger.error(f"Missing columns: {schema_health.get('missing_columns', [])}")
-            logger.error("Run 'python migrate_v002.py' to fix the schema")
-            
+            logger.error("=" * 70)
+            logger.error("DATABASE SCHEMA HEALTH CHECK FAILED")
+            logger.error("=" * 70)
+            logger.error(f"Current schema version: {schema_health.get('schema_version', 'unknown')}")
+            logger.error(f"Missing {len(schema_health.get('missing_columns', []))} columns:")
+            for col in schema_health.get('missing_columns', []):
+                logger.error(f"  - {col}")
+            logger.error("")
+            logger.error("The migration should have run automatically during deployment.")
+            logger.error("If you're seeing this, the migration may have failed.")
+            logger.error("")
+            logger.error("To fix manually:")
+            logger.error("  1. Run: python -m database.migrations.run_all_migrations")
+            logger.error("  2. Or redeploy to trigger automatic migration")
+            logger.error("=" * 70)
+
             # Send alert to Telegram
             try:
                 await self.telegram.send_message(
                     f"🔴 <b>Pulse Worker Failed to Start</b>\n\n"
-                    f"<b>Reason:</b> Database schema out of date\n"
-                    f"<b>Missing:</b> {', '.join(schema_health.get('missing_columns', []))}\n\n"
-                    f"Run: <code>railway run python migrate_v002.py</code>"
+                    f"<b>Reason:</b> Database schema health check failed\n"
+                    f"<b>Schema Version:</b> {schema_health.get('schema_version', 'unknown')}\n"
+                    f"<b>Missing Columns:</b> {len(schema_health.get('missing_columns', []))}\n\n"
+                    f"<b>Action Required:</b>\n"
+                    f"Run: <code>python -m database.migrations.run_all_migrations</code>\n"
+                    f"Or redeploy on Railway to trigger automatic migration."
                 )
             except:
                 pass
-            
+
             sys.exit(1)
-        
-        logger.info(f"Schema health check PASSED - version {schema_health.get('schema_version', 'unknown')}")
+
+        logger.info(f"✅ Schema health check PASSED - version {schema_health.get('schema_version', 'unknown')}")
         
         # Schedule the job
         self.scheduler.add_job(

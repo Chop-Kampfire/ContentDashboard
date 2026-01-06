@@ -405,6 +405,7 @@ def get_all_profiles() -> pd.DataFrame:
         
         data = [{
             "id": p.id,
+            "platform": p.platform or 'tiktok',
             "username": p.username,
             "display_name": p.display_name or p.username,
             "avatar_url": p.avatar_url,
@@ -467,22 +468,44 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
         ).filter(
             Post.posted_at >= cutoff
         ).order_by(desc(Post.view_count)).all()
-        
-        data = [{
-            "id": p.Post.id,
-            "post_id": p.Post.platform_post_id or p.Post.tiktok_post_id,
-            "username": f"@{p.Profile.username}",
-            "description": (p.Post.description or "")[:80] + "..." if p.Post.description and len(p.Post.description) > 80 else (p.Post.description or ""),
-            "views": p.Post.view_count,
-            "likes": p.Post.like_count,
-            "comments": p.Post.comment_count,
-            "shares": p.Post.share_count,
-            "is_viral": p.Post.is_viral,
-            "posted_at": p.Post.posted_at,
-            "avg_views": p.Profile.average_post_views,
-            "efficacy_score": round((p.Post.view_count / p.Profile.average_post_views * 100), 1) if p.Profile.average_post_views > 0 else 0
-        } for p in posts]
-        
+
+        data = []
+        for p in posts:
+            platform = p.Profile.platform or 'tiktok'
+
+            # Platform-specific efficacy metric
+            if platform == 'reddit':
+                efficacy_metric = p.Post.reddit_score or 0
+                efficacy_metric_name = 'Score'
+                avg_metric = p.Profile.average_post_views  # Could be renamed to average_post_score in future
+            else:
+                efficacy_metric = p.Post.view_count
+                efficacy_metric_name = 'Views'
+                avg_metric = p.Profile.average_post_views
+
+            # Calculate efficacy percentage
+            efficacy_score = round((efficacy_metric / avg_metric * 100), 1) if avg_metric > 0 else 0
+
+            data.append({
+                "id": p.Post.id,
+                "post_id": p.Post.platform_post_id or p.Post.tiktok_post_id,
+                "platform": platform,
+                "username": f"@{p.Profile.username}",
+                "description": (p.Post.description or "")[:80] + "..." if p.Post.description and len(p.Post.description) > 80 else (p.Post.description or ""),
+                "efficacy_metric": efficacy_metric,
+                "efficacy_metric_name": efficacy_metric_name,
+                "views": p.Post.view_count,
+                "likes": p.Post.like_count,
+                "comments": p.Post.comment_count,
+                "shares": p.Post.share_count,
+                "reddit_score": p.Post.reddit_score or 0,
+                "retweets": p.Post.retweet_count or 0,
+                "is_viral": p.Post.is_viral,
+                "posted_at": p.Post.posted_at,
+                "avg_metric": avg_metric,
+                "efficacy_score": efficacy_score
+            })
+
         return pd.DataFrame(data)
     except Exception as e:
         logger.error(f"Error fetching posts: {e}")
@@ -731,28 +754,40 @@ def format_number(n: int) -> str:
     return str(n)
 
 
-def add_profile_to_watchlist(username: str) -> tuple[bool, str]:
-    """Add a new profile to the watchlist."""
-    from scraper import TikTokScraper
-    
-    logger.info(f"Adding profile to watchlist: @{username}")
-    
+def add_profile_to_watchlist(username: str, platform: str = 'tiktok') -> tuple[bool, str]:
+    """
+    Add a new profile to the watchlist.
+
+    Args:
+        username: Platform handle (without @)
+        platform: Platform type ('tiktok', 'twitter', 'reddit'). Defaults to 'tiktok'.
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    from scraper import ScraperFactory
+
+    logger.info(f"Adding {platform} profile to watchlist: @{username}")
+
     try:
-        scraper = TikTokScraper()
+        scraper = ScraperFactory.get_scraper(platform)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         profile = loop.run_until_complete(scraper.add_profile(username, send_notification=True))
         loop.close()
-        
+
         # Clear cache to refresh data
         get_all_profiles.clear()
         get_aggregate_stats.clear()
         get_all_posts.clear()
-        
-        logger.info(f"Successfully added profile: @{profile.username}")
-        return True, f"Successfully added @{profile.username}"
+
+        logger.info(f"Successfully added {platform} profile: @{profile.username}")
+        return True, f"Successfully added @{profile.username} ({platform})"
+    except NotImplementedError as e:
+        logger.warning(f"{platform.title()} scraper not implemented: {e}")
+        return False, f"{platform.title()} integration coming soon! Currently only TikTok is supported."
     except Exception as e:
-        logger.error(f"Failed to add profile @{username}: {e}")
+        logger.error(f"Failed to add profile @{username} ({platform}): {e}")
         return False, f"Error: {str(e)}"
 
 
@@ -928,34 +963,43 @@ def main():
             st.info("No posts data available. Add profiles and wait for the scraper to fetch data.")
         else:
             # Filters
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
+            col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+
             with col1:
                 search_term = st.text_input("🔍 Search posts", placeholder="Search by username or description...")
-            
+
             with col2:
-                viral_filter = st.selectbox("Filter", ["All Posts", "Viral Only 🔥", "Below Average"])
-            
+                # Platform filter
+                platforms_in_data = ['All'] + sorted(posts_df['platform'].unique().tolist())
+                platform_filter = st.selectbox("Platform", platforms_in_data)
+
             with col3:
-                sort_by = st.selectbox("Sort by", ["Views (High to Low)", "Efficacy Score", "Most Recent"])
-            
+                viral_filter = st.selectbox("Filter", ["All Posts", "Viral Only 🔥", "Below Average"])
+
+            with col4:
+                sort_by = st.selectbox("Sort by", ["Performance (High to Low)", "Efficacy Score", "Most Recent"])
+
             # Apply filters
             filtered_df = posts_df.copy()
-            
+
             if search_term:
                 filtered_df = filtered_df[
                     filtered_df['username'].str.contains(search_term, case=False) |
                     filtered_df['description'].str.contains(search_term, case=False, na=False)
                 ]
-            
+
+            if platform_filter and platform_filter != 'All':
+                filtered_df = filtered_df[filtered_df['platform'] == platform_filter]
+
             if viral_filter == "Viral Only 🔥":
                 filtered_df = filtered_df[filtered_df['is_viral'] == True]
             elif viral_filter == "Below Average":
                 filtered_df = filtered_df[filtered_df['efficacy_score'] < 100]
-            
-            # Sort
-            if sort_by == "Views (High to Low)":
-                filtered_df = filtered_df.sort_values('views', ascending=False)
+
+            # Sort (platform-aware)
+            if sort_by == "Performance (High to Low)":
+                # Sort by platform-specific efficacy metric (Views or Score)
+                filtered_df = filtered_df.sort_values('efficacy_metric', ascending=False)
             elif sort_by == "Efficacy Score":
                 filtered_df = filtered_df.sort_values('efficacy_score', ascending=False)
             elif sort_by == "Most Recent":
@@ -974,19 +1018,25 @@ def main():
                 st.metric("Viral Posts", viral_count)
             
             st.markdown("---")
-            
-            # Display table
-            display_cols = ['username', 'description', 'views', 'likes', 'comments', 'shares', 'efficacy_score', 'is_viral', 'posted_at']
-            
+
+            # Display table (platform-aware columns)
+            display_cols = ['platform', 'username', 'description', 'efficacy_metric', 'likes', 'comments', 'shares', 'efficacy_score', 'is_viral', 'posted_at']
+
             # Format for display
             display_df = filtered_df[display_cols].copy()
-            display_df.columns = ['Account', 'Description', 'Views', 'Likes', 'Comments', 'Shares', 'Efficacy %', 'Viral 🔥', 'Posted']
-            display_df['Views'] = display_df['Views'].apply(lambda x: f"{x:,}")
+            display_df.columns = ['Platform', 'Account', 'Description', 'Performance', 'Likes', 'Comments', 'Shares', 'Efficacy %', 'Viral 🔥', 'Posted']
+
+            # Platform icon/emoji
+            platform_icons = {'tiktok': '🎵', 'twitter': '🐦', 'reddit': '🔴'}
+            display_df['Platform'] = display_df['Platform'].apply(lambda x: f"{platform_icons.get(x, '📱')} {x.title()}")
+
+            # Format numbers - Performance is platform-specific (Views for TikTok/Twitter, Score for Reddit)
+            display_df['Performance'] = display_df['Performance'].apply(lambda x: f"{x:,}")
             display_df['Likes'] = display_df['Likes'].apply(lambda x: f"{x:,}")
             display_df['Efficacy %'] = display_df['Efficacy %'].apply(lambda x: f"{x:.1f}%")
             display_df['Viral 🔥'] = display_df['Viral 🔥'].apply(lambda x: "🔥" if x else "")
             display_df['Posted'] = pd.to_datetime(display_df['Posted']).dt.strftime('%Y-%m-%d %H:%M')
-            
+
             st.dataframe(
                 display_df,
                 use_container_width=True,
@@ -1017,9 +1067,19 @@ def main():
                     
                     with col2:
                         st.markdown("##### Engagement Breakdown")
+
+                        # Platform-specific metrics
+                        platform = post_data.get('platform', 'tiktok')
+                        if platform == 'reddit':
+                            metric_label = 'Score'
+                            metric_value = post_data.get('reddit_score', 0)
+                        else:
+                            metric_label = 'Views'
+                            metric_value = post_data.get('views', 0)
+
                         engagement_data = {
-                            'Metric': ['Views', 'Likes', 'Comments', 'Shares'],
-                            'Count': [post_data['views'], post_data['likes'], post_data['comments'], post_data['shares']]
+                            'Metric': [metric_label, 'Likes', 'Comments', 'Shares'],
+                            'Count': [metric_value, post_data['likes'], post_data['comments'], post_data['shares']]
                         }
                         fig = px.bar(
                             engagement_data,
@@ -1048,19 +1108,34 @@ def main():
         
         with col1:
             st.markdown("#### ➕ Add New Profile")
-            
+
             with st.form("add_profile_form"):
-                new_username = st.text_input(
-                    "TikTok Username",
-                    placeholder="e.g., charlidamelio (without @)",
-                    help="Enter the TikTok username without the @ symbol"
+                platform_choice = st.selectbox(
+                    "Platform",
+                    ["TikTok", "Twitter", "Reddit"],
+                    help="Select the social media platform"
                 )
-                
+
+                platform_map = {'TikTok': 'tiktok', 'Twitter': 'twitter', 'Reddit': 'reddit'}
+                platform_key = platform_map[platform_choice]
+
+                placeholder_map = {
+                    'tiktok': 'e.g., charlidamelio (without @)',
+                    'twitter': 'e.g., elonmusk (without @)',
+                    'reddit': 'e.g., science (subreddit or user)'
+                }
+
+                new_username = st.text_input(
+                    f"{platform_choice} Username",
+                    placeholder=placeholder_map[platform_key],
+                    help=f"Enter the {platform_choice} username without the @ symbol"
+                )
+
                 submit_add = st.form_submit_button("Add to Watchlist", use_container_width=True)
-                
+
                 if submit_add and new_username:
-                    with st.spinner(f"Adding @{new_username}..."):
-                        success, message = add_profile_to_watchlist(new_username)
+                    with st.spinner(f"Adding @{new_username} ({platform_choice})..."):
+                        success, message = add_profile_to_watchlist(new_username, platform_key)
                         if success:
                             st.success(message)
                             st.toast(f"✅ @{new_username} added! Refresh the page to see updates.", icon="🎉")
@@ -1094,9 +1169,14 @@ def main():
         st.markdown("#### 📋 Current Watchlist")
         
         if not profiles_df.empty:
-            # Display current profiles in a nice table
-            watchlist_df = profiles_df[['username', 'display_name', 'followers', 'videos', 'avg_views', 'last_updated']].copy()
-            watchlist_df.columns = ['Username', 'Display Name', 'Followers', 'Videos', 'Avg Views', 'Last Updated']
+            # Display current profiles in a nice table (platform-aware)
+            watchlist_df = profiles_df[['platform', 'username', 'display_name', 'followers', 'videos', 'avg_views', 'last_updated']].copy()
+            watchlist_df.columns = ['Platform', 'Username', 'Display Name', 'Followers', 'Videos', 'Avg Views', 'Last Updated']
+
+            # Platform icons
+            platform_icons = {'tiktok': '🎵', 'twitter': '🐦', 'reddit': '🔴'}
+            watchlist_df['Platform'] = watchlist_df['Platform'].apply(lambda x: f"{platform_icons.get(x, '📱')} {x.title()}")
+
             watchlist_df['Username'] = watchlist_df['Username'].apply(lambda x: f"@{x}")
             watchlist_df['Followers'] = watchlist_df['Followers'].apply(lambda x: f"{x:,}")
             watchlist_df['Avg Views'] = watchlist_df['Avg Views'].apply(lambda x: f"{int(x):,}" if x else "0")

@@ -6,11 +6,18 @@ Updated for ScrapTik API with correct 2-step process:
 1. /username-to-id - Convert username to numeric user_id
 2. /user-posts - Fetch posts using user_id (NOT username)
 
+Features:
+- Automatic retry with exponential backoff for 429 rate limits
+- Configurable max retries (default: 3)
+- Intelligent backoff: 2s → 4s → 8s
+- Detailed logging of rate limit events
+
 API Documentation: https://rapidapi.com/scraptik-api-scraptik-api-default/api/scraptik
 """
 
 import httpx
 import logging
+import asyncio
 from typing import Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -18,6 +25,11 @@ from dataclasses import dataclass
 from config import config
 
 logger = logging.getLogger(__name__)
+
+
+class RateLimitError(Exception):
+    """Exception for rate limit errors after all retries exhausted."""
+    pass
 
 
 @dataclass
@@ -91,43 +103,84 @@ class TikTokClient:
         self,
         endpoint: str,
         params: dict,
-        timeout: float = 30.0
+        timeout: float = 30.0,
+        max_retries: int = 3
     ) -> dict:
-        """Make authenticated request to RapidAPI."""
-        
+        """
+        Make authenticated request to RapidAPI with automatic retry on rate limits.
+
+        Args:
+            endpoint: API endpoint path
+            params: Query parameters
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retry attempts for 429 errors (default: 3)
+
+        Returns:
+            JSON response data
+
+        Raises:
+            RateLimitError: After exhausting all retries on 429 errors
+            TikTokAPIError: For other API errors
+        """
         url = f"{self.base_url}{endpoint}"
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url,
-                    headers=self.headers,
-                    params=params,
-                    timeout=timeout
-                )
-                
-                logger.debug(f"API Request: {url} | Status: {response.status_code}")
-                
-                if response.status_code == 404:
-                    raise TikTokAPIError(f"Endpoint not found: {endpoint}")
-                
-                if response.status_code == 429:
-                    raise TikTokAPIError("Rate limit exceeded. Please wait before retrying.")
-                
-                if response.status_code == 401:
-                    raise TikTokAPIError("Invalid API key. Check your RAPIDAPI_KEY.")
-                
-                if response.status_code != 200:
-                    raise TikTokAPIError(
-                        f"API request failed with status {response.status_code}: {response.text}"
+
+        for attempt in range(max_retries + 1):
+            async with httpx.AsyncClient() as client:
+                try:
+                    response = await client.get(
+                        url,
+                        headers=self.headers,
+                        params=params,
+                        timeout=timeout
                     )
-                
-                return response.json()
-                
-            except httpx.TimeoutException:
-                raise TikTokAPIError(f"Request timeout for {endpoint}")
-            except httpx.HTTPError as e:
-                raise TikTokAPIError(f"HTTP error: {str(e)}")
+
+                    logger.debug(f"API Request: {url} | Status: {response.status_code}")
+
+                    # Handle 429 Rate Limit with exponential backoff
+                    if response.status_code == 429:
+                        if attempt < max_retries:
+                            backoff_seconds = 2 ** attempt  # 2s, 4s, 8s
+                            logger.warning(
+                                f"⚠️  Rate limit hit on {endpoint} "
+                                f"(attempt {attempt + 1}/{max_retries + 1}). "
+                                f"Retrying in {backoff_seconds}s..."
+                            )
+                            await asyncio.sleep(backoff_seconds)
+                            continue
+                        else:
+                            logger.error(
+                                f"❌ Rate limit exhausted after {max_retries + 1} attempts on {endpoint}"
+                            )
+                            raise RateLimitError(
+                                f"Rate limit exceeded after {max_retries + 1} attempts. "
+                                f"Please wait before making more requests."
+                            )
+
+                    # Handle other error codes
+                    if response.status_code == 404:
+                        raise TikTokAPIError(f"Endpoint not found: {endpoint}")
+
+                    if response.status_code == 401:
+                        raise TikTokAPIError("Invalid API key. Check your RAPIDAPI_KEY.")
+
+                    if response.status_code != 200:
+                        raise TikTokAPIError(
+                            f"API request failed with status {response.status_code}: {response.text}"
+                        )
+
+                    # Success - log if this was a retry
+                    if attempt > 0:
+                        logger.info(f"✅ Request succeeded after {attempt + 1} attempts")
+
+                    return response.json()
+
+                except httpx.TimeoutException:
+                    raise TikTokAPIError(f"Request timeout for {endpoint}")
+                except httpx.HTTPError as e:
+                    raise TikTokAPIError(f"HTTP error: {str(e)}")
+
+        # Should never reach here due to loop logic, but added for safety
+        raise RateLimitError(f"Unexpected retry loop exit on {endpoint}")
     
     # =========================================================================
     # STEP 1: USERNAME TO USER ID
