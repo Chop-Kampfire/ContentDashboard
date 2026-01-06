@@ -503,13 +503,30 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
                 "is_viral": p.Post.is_viral,
                 "posted_at": p.Post.posted_at,
                 "avg_metric": avg_metric,
+                "avg_views": avg_metric,  # Backward compatibility for charts
                 "efficacy_score": efficacy_score
             })
+
+        # Return DataFrame with proper column structure even if empty
+        if not data:
+            # Return empty DataFrame with all expected columns
+            return pd.DataFrame(columns=[
+                'id', 'post_id', 'platform', 'username', 'description',
+                'efficacy_metric', 'efficacy_metric_name', 'views', 'likes',
+                'comments', 'shares', 'reddit_score', 'retweets', 'is_viral',
+                'posted_at', 'avg_metric', 'avg_views', 'efficacy_score'
+            ])
 
         return pd.DataFrame(data)
     except Exception as e:
         logger.error(f"Error fetching posts: {e}")
-        return pd.DataFrame()
+        # Return empty DataFrame with proper column structure
+        return pd.DataFrame(columns=[
+            'id', 'post_id', 'platform', 'username', 'description',
+            'efficacy_metric', 'efficacy_metric_name', 'views', 'likes',
+            'comments', 'shares', 'reddit_score', 'retweets', 'is_viral',
+            'posted_at', 'avg_metric', 'avg_views', 'efficacy_score'
+        ])
     finally:
         session.close()
 
@@ -633,18 +650,60 @@ def create_follower_growth_chart(profile_ids: list[int], profile_names: dict) ->
 
 
 def create_post_performance_chart(df: pd.DataFrame) -> go.Figure:
-    """Create bar chart comparing post views vs average."""
-    
+    """
+    Create bar chart comparing post views vs average.
+
+    Handles empty DataFrames and missing columns gracefully for Railway deployments
+    where the database may be empty on first start.
+    """
+
+    # Check if DataFrame is empty or missing required columns
     if df.empty:
         fig = go.Figure()
-        fig.add_annotation(text="No data available", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+        fig.add_annotation(
+            text="No posts available yet. Add profiles to start tracking!",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14, color='#888')
+        )
         return fig
-    
+
+    # Verify required columns exist
+    required_cols = ['views', 'avg_views', 'username']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+
+    if missing_cols:
+        logger.error(f"create_post_performance_chart: Missing columns {missing_cols}")
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Data loading error. Missing: {', '.join(missing_cols)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=12, color='#ff6b6b')
+        )
+        return fig
+
+    # Filter out posts with no views (avoids empty charts)
+    df_filtered = df[df['views'] > 0].copy()
+
+    if df_filtered.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No posts with views yet. Check back soon!",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14, color='#888')
+        )
+        return fig
+
     # Get top 10 posts by views
-    top_posts = df.nlargest(10, 'views')
-    
+    top_posts = df_filtered.nlargest(10, 'views')
+
     fig = go.Figure()
-    
+
     # Actual views bars
     fig.add_trace(go.Bar(
         x=top_posts['username'],
@@ -654,7 +713,7 @@ def create_post_performance_chart(df: pd.DataFrame) -> go.Figure:
         marker_line_color='#00a896',
         marker_line_width=1
     ))
-    
+
     # Average line
     fig.add_trace(go.Scatter(
         x=top_posts['username'],
