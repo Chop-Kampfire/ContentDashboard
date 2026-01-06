@@ -109,6 +109,9 @@ class TikTokClient:
         """
         Make authenticated request to RapidAPI with automatic retry on rate limits.
 
+        IMPORTANT: Includes mandatory 1.5s delay after successful requests to comply
+        with Basic plan rate limits (strict per-second limits).
+
         Args:
             endpoint: API endpoint path
             params: Query parameters
@@ -172,7 +175,14 @@ class TikTokClient:
                     if attempt > 0:
                         logger.info(f"✅ Request succeeded after {attempt + 1} attempts")
 
-                    return response.json()
+                    response_data = response.json()
+
+                    # MANDATORY DELAY: Basic plan has strict per-second rate limits
+                    # Sleep 1.5s after every successful API call to stay under limits
+                    logger.debug(f"⏱️  Rate limit compliance: Sleeping 1.5s after {endpoint}")
+                    await asyncio.sleep(1.5)
+
+                    return response_data
 
                 except httpx.TimeoutException:
                     raise TikTokAPIError(f"Request timeout for {endpoint}")
