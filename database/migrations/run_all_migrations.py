@@ -5,6 +5,7 @@ Runs all migrations in sequence, handling both fresh and existing databases.
 This script:
 1. Creates initial schema if tables don't exist (v0.0.1)
 2. Adds multi-platform support columns if needed (v0.0.2)
+3. Increases ID column lengths for long secUid values (v0.0.3)
 
 Railway Environment Variable Handling:
 - Retries up to 10 times with exponential backoff (max 30s total)
@@ -151,9 +152,9 @@ def run_migrations():
         logger.info("")
 
         # =====================================================================
-        # STEP 3: Verify schema version (check for v0.0.2 columns)
+        # STEP 3: Check and run v0.0.2 migration if needed
         # =====================================================================
-        logger.info("🔍 Checking schema version...")
+        logger.info("🔍 Checking for v0.0.2 migration...")
 
         with engine.connect() as conn:
             # Check if v0.0.2 migration is needed
@@ -163,37 +164,75 @@ def run_migrations():
                 WHERE table_name = 'profiles' AND column_name = 'platform'
             """))
 
-            if result.fetchone():
-                logger.info("✅ Schema is up to date (v0.0.2)")
-                logger.info("")
-                logger.info("=" * 70)
-                logger.info("🎉 ALL MIGRATIONS COMPLETE")
-                logger.info("=" * 70)
-                return True
-            else:
+            if not result.fetchone():
                 logger.info("⚠️  Schema needs upgrade to v0.0.2")
                 logger.info("")
 
+                # =====================================================================
+                # Run v0.0.2 migration (add multi-platform columns)
+                # =====================================================================
+                logger.info("🚀 Applying v0.0.2 migration (Multi-Platform Support)...")
+                logger.info("")
+
+                from database.migrations.v002_multiplatform import run_migration as run_v002
+
+                success = run_v002()
+
+                if not success:
+                    logger.error("❌ Migration v0.0.2 failed")
+                    return False
+
+                logger.info("")
+            else:
+                logger.info("✅ v0.0.2 already applied (platform column exists)")
+                logger.info("")
+
         # =====================================================================
-        # STEP 4: Run v0.0.2 migration (add multi-platform columns)
+        # STEP 4: Check and run v0.0.3 migration if needed
         # =====================================================================
-        logger.info("🚀 Applying v0.0.2 migration (Multi-Platform Support)...")
-        logger.info("")
+        logger.info("🔍 Checking for v0.0.3 migration...")
 
-        # Import and run the v002 migration
-        from database.migrations.v002_multiplatform import run_migration
+        with engine.connect() as conn:
+            # Check if v0.0.3 migration is needed (check column length)
+            result = conn.execute(text("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_name = 'profiles'
+                AND column_name = 'platform_user_id'
+            """))
 
-        success = run_migration()
+            current_length = result.scalar()
 
-        if success:
-            logger.info("")
-            logger.info("=" * 70)
-            logger.info("🎉 ALL MIGRATIONS COMPLETE - Database ready!")
-            logger.info("=" * 70)
-            return True
-        else:
-            logger.error("❌ Migration v0.0.2 failed")
-            return False
+            if current_length and current_length < 255:
+                logger.info(f"⚠️  Schema needs upgrade to v0.0.3 (current length: {current_length})")
+                logger.info("")
+
+                # =====================================================================
+                # Run v0.0.3 migration (increase ID column lengths)
+                # =====================================================================
+                logger.info("🚀 Applying v0.0.3 migration (Increase ID Column Lengths)...")
+                logger.info("")
+
+                from database.migrations.v003_increase_id_lengths import run_migration as run_v003
+
+                success = run_v003()
+
+                if not success:
+                    logger.error("❌ Migration v0.0.3 failed")
+                    return False
+
+                logger.info("")
+            else:
+                logger.info(f"✅ v0.0.3 already applied (platform_user_id is VARCHAR({current_length}))")
+                logger.info("")
+
+        # =====================================================================
+        # ALL MIGRATIONS COMPLETE
+        # =====================================================================
+        logger.info("=" * 70)
+        logger.info("🎉 ALL MIGRATIONS COMPLETE - Database ready!")
+        logger.info("=" * 70)
+        return True
 
     except Exception as e:
         logger.error(f"❌ Migration failed: {e}")
