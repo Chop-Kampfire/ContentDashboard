@@ -451,6 +451,56 @@ class TikTokClient:
 
         logger.info(f"📦 Received {len(posts_list)} posts from API")
 
+        # DEBUG: If we got 0 posts, log the response structure to diagnose the issue
+        if len(posts_list) == 0:
+            logger.warning("⚠️  Received 0 posts from API - debugging response structure")
+            logger.debug(f"🔍 Full response top-level keys: {list(data.keys())}")
+
+            # Check what's in data.data
+            data_inner = data.get("data", {})
+            if isinstance(data_inner, dict):
+                logger.debug(f"🔍 data.data keys: {list(data_inner.keys())}")
+
+                # Try alternative paths for posts
+                # Path 1: data.data.itemList (common in TikTok APIs)
+                if "itemList" in data_inner:
+                    logger.info("🔍 Found posts at data.data.itemList, using that instead")
+                    posts_list = data_inner["itemList"]
+                    logger.info(f"📦 Found {len(posts_list) if isinstance(posts_list, list) else 0} posts at itemList")
+
+                # Path 2: data.data.aweme_list (older TikTok API format)
+                elif "aweme_list" in data_inner:
+                    logger.info("🔍 Found posts at data.data.aweme_list, using that instead")
+                    posts_list = data_inner["aweme_list"]
+                    logger.info(f"📦 Found {len(posts_list) if isinstance(posts_list, list) else 0} posts at aweme_list")
+
+                # Path 3: Check if data.data itself is the list
+                elif isinstance(data_inner, list):
+                    logger.info("🔍 data.data is directly a list, using that")
+                    posts_list = data_inner
+                    logger.info(f"📦 Found {len(posts_list)} posts in direct list")
+
+                else:
+                    # Log sample of what we actually got
+                    logger.warning(f"⚠️  Could not find posts in expected locations")
+                    logger.debug(f"🔍 Sample of data.data content (first 500 chars): {str(data_inner)[:500]}")
+
+            # Path 4: Check if videos is at root level
+            elif "videos" in data:
+                logger.info("🔍 Found posts at root level data.videos, using that instead")
+                posts_list = data["videos"]
+                logger.info(f"📦 Found {len(posts_list) if isinstance(posts_list, list) else 0} posts at root videos")
+
+            # Path 5: Check if data itself is the list
+            elif isinstance(data.get("data"), list):
+                logger.info("🔍 data is directly a list, using that")
+                posts_list = data["data"]
+                logger.info(f"📦 Found {len(posts_list)} posts in data as list")
+
+            else:
+                logger.error("❌ Could not find posts array in any expected location")
+                logger.debug(f"🔍 Full response (first 1000 chars): {str(data)[:1000]}")
+
         cutoff_date = datetime.utcnow() - timedelta(days=days_back)
         posts = []
 
