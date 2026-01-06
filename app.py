@@ -1,8 +1,10 @@
 """
 Pulse - Multi-Platform Analytics Dashboard
 Main Streamlit Application
+Version 0.0.3
 
 A sleek, investment-style analytics dashboard for tracking TikTok performance.
+Automatic database migrations on Railway deployment.
 """
 
 import os
@@ -354,7 +356,7 @@ def display_schema_error(health: dict):
     st.markdown("""
     <div class="schema-error">
         <h3>⚠️ Database Schema Out of Date</h3>
-        <p>The database is missing required columns for version 0.0.2.</p>
+        <p>The database is missing required columns for schema version 0.0.2.</p>
     </div>
     """, unsafe_allow_html=True)
     

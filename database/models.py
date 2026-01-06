@@ -1,7 +1,7 @@
 """
 Pulse - Multi-Platform Analytics Dashboard
 Database Models (SQLAlchemy ORM)
-Version 0.0.2 - Supports TikTok, Twitter/X, and Reddit
+Version 0.0.3 - Railway Deployment with Automatic Migrations
 """
 
 from datetime import datetime
