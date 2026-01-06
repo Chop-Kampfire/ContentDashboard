@@ -251,7 +251,7 @@ class TikTokClient:
             username: TikTok handle (without @)
 
         Returns:
-            TikTokProfile dataclass with user info (includes user_id)
+            TikTokProfile dataclass with user info (includes secUid)
         """
         # Sanitize input: strip @ symbol, whitespace, and convert to lowercase
         username = username.lstrip("@").strip().lower()
@@ -268,13 +268,27 @@ class TikTokClient:
             user = user_info.get("user", user_info)
             stats = user_info.get("stats", {})
 
-            # Extract user_id (secUid or id)
-            user_id = str(
+            # CRITICAL: Extract secUid for posts endpoint
+            # Try multiple locations in the response
+            sec_uid = (
                 user.get("secUid") or
-                user.get("id") or
-                user.get("uid") or
+                user.get("sec_uid") or
+                user_info.get("secUid") or
+                user_info.get("sec_uid") or
+                data.get("secUid") or
                 ""
             )
+
+            # Defensive check: secUid is required for fetching posts
+            if not sec_uid:
+                logger.error(f"❌ Failed to extract secUid from profile response for @{username}")
+                logger.debug(f"Response structure: data keys={list(data.keys())}, user keys={list(user.keys())}")
+                raise TikTokAPIError(
+                    f"Missing secUid in profile response for @{username}. "
+                    f"Cannot fetch posts without secUid."
+                )
+
+            logger.info(f"✅ Extracted secUid for @{username}: {sec_uid[:20]}...")
 
             # Extract avatar URL
             avatar_url = ""
@@ -285,7 +299,7 @@ class TikTokClient:
                 avatar_url = avatar_data[0]
 
             profile = TikTokProfile(
-                user_id=user_id,
+                user_id=sec_uid,  # Store secUid in user_id field
                 username=user.get("uniqueId", username),
                 display_name=user.get("nickname", ""),
                 bio=user.get("signature", ""),
@@ -315,22 +329,35 @@ class TikTokClient:
         days_back: int = 30
     ) -> list[TikTokPost]:
         """
-        Fetch recent posts using user_id (secUid) via tiktok-api23.
+        Fetch recent posts using secUid via tiktok-api23.
 
-        Note: tiktok-api23 uses secUid for user identification, not numeric user_id.
+        IMPORTANT: user_id parameter must be a valid secUid (not numeric user_id).
 
         Args:
-            user_id: TikTok secUid (from profile fetch)
+            user_id: TikTok secUid (obtained from profile fetch)
             max_posts: Maximum number of posts to fetch
             days_back: Only include posts from last N days
 
         Returns:
             List of TikTokPost dataclasses
-        """
-        logger.info(f"Fetching posts for user_id: {user_id[:20]}... (tiktok-api23)")
 
+        Raises:
+            TikTokAPIError: If secUid is empty or invalid
+        """
+        # Defensive check: secUid cannot be empty
+        if not user_id or not str(user_id).strip():
+            logger.error("❌ Cannot fetch posts: secUid is empty")
+            raise TikTokAPIError(
+                "secUid is required to fetch posts. "
+                "Make sure to fetch profile first to obtain secUid."
+            )
+
+        sec_uid = str(user_id).strip()
+        logger.info(f"Fetching posts for secUid: {sec_uid[:20]}... (tiktok-api23)")
+
+        # tiktok-api23 requires exact parameter name 'secUid'
         params = {
-            "secUid": str(user_id),
+            "secUid": sec_uid,
             "count": min(max_posts, 35)  # API limit
         }
 
@@ -348,36 +375,42 @@ class TikTokClient:
         """
         Fetch recent posts by username via tiktok-api23.
 
-        This is the primary method - tiktok-api23 works best with direct username queries.
+        IMPORTANT: This method requires secUid. If not provided via cached_user_id,
+        it will fetch the profile first to obtain secUid.
 
         Args:
             username: TikTok handle (without @)
             max_posts: Maximum number of posts to fetch
             days_back: Only include posts from last N days
-            cached_user_id: Optional cached secUid (for efficiency)
+            cached_user_id: Optional cached secUid (for efficiency - skips profile fetch)
 
         Returns:
-            Tuple of (posts_list, user_id/secUid)
+            Tuple of (posts_list, secUid)
         """
         # Sanitize input: strip @ symbol, whitespace, and convert to lowercase
         username = username.lstrip("@").strip().lower()
 
-        logger.info(f"Fetching posts for @{username} via tiktok-api23...")
+        # Determine secUid
+        if cached_user_id and str(cached_user_id).strip():
+            # Use cached secUid (efficient path)
+            sec_uid = str(cached_user_id).strip()
+            logger.info(f"Using cached secUid for @{username}: {sec_uid[:20]}...")
+        else:
+            # No cached secUid - need to fetch profile first
+            logger.info(f"No cached secUid for @{username}, fetching profile first...")
+            profile = await self.fetch_profile(username)
+            sec_uid = profile.user_id
 
-        # tiktok-api23 requires parameter named 'uniqueId', not 'username'
-        params = {
-            "uniqueId": username,
-            "count": min(max_posts, 35)
-        }
+            if not sec_uid:
+                raise TikTokAPIError(
+                    f"Failed to obtain secUid for @{username}. "
+                    f"Cannot fetch posts without secUid."
+                )
 
-        data = await self._make_request("/api/user/posts", params)
+        # Now fetch posts using secUid
+        posts = await self.fetch_recent_posts_by_id(sec_uid, max_posts, days_back)
 
-        posts = self._parse_posts_response(data, days_back)
-
-        # Extract secUid from response for caching
-        user_id = cached_user_id or data.get("data", {}).get("secUid", "")
-
-        return posts, user_id
+        return posts, sec_uid
     
     def _parse_posts_response(self, data: dict, days_back: int = 30) -> list[TikTokPost]:
         """

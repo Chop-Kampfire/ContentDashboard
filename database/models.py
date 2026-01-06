@@ -49,11 +49,11 @@ class Profile(Base):
     
     # Platform identification
     platform = Column(String(32), nullable=False, default=Platform.TIKTOK, index=True)
-    platform_user_id = Column(String(64), nullable=True)  # Platform's internal ID
+    platform_user_id = Column(String(128), nullable=True)  # Platform's internal ID (secUid for TikTok)
     username = Column(String(64), nullable=False, index=True)  # @handle
-    
+
     # Legacy column - kept for backwards compatibility during migration
-    tiktok_user_id = Column(String(64), nullable=True)
+    tiktok_user_id = Column(String(128), nullable=True)  # TikTok secUid (increased from 64 for Lundehund API)
     
     # User categorization
     user_role = Column(String(32), nullable=True, default=UserRole.CREATOR)
