@@ -167,6 +167,22 @@ class TikTokClient:
 
                         logger.debug(f"API Request: {url} | Status: {response.status_code}")
 
+                        # Handle 202 with validation errors (tiktok-api23 specific)
+                        if response.status_code == 202:
+                            # tiktok-api23 returns 202 for validation errors
+                            try:
+                                response_data = response.json()
+                                success = response_data.get("success", True)
+
+                                if not success:
+                                    error_msg = response_data.get("error", response_data.get("message", "Unknown validation error"))
+                                    logger.error(f"❌ API validation error (202): {error_msg}")
+                                    logger.debug(f"Full response: {response_data}")
+                                    raise TikTokAPIError(f"API validation error: {error_msg}")
+                            except ValueError:
+                                # Can't parse JSON, treat as error
+                                raise TikTokAPIError(f"Unexpected 202 response: {response.text}")
+
                         # Handle 429 Rate Limit with generous backoff
                         if response.status_code == 429:
                             # Log rate limit headers if available
@@ -237,11 +253,13 @@ class TikTokClient:
         Returns:
             TikTokProfile dataclass with user info (includes user_id)
         """
+        # Sanitize input: strip @ symbol, whitespace, and convert to lowercase
         username = username.lstrip("@").strip().lower()
 
         logger.info(f"Fetching profile for @{username} via tiktok-api23...")
 
-        params = {"username": username}
+        # tiktok-api23 requires parameter named 'uniqueId', not 'username'
+        params = {"uniqueId": username}
         data = await self._make_request("/api/user/info", params)
 
         try:
@@ -341,12 +359,14 @@ class TikTokClient:
         Returns:
             Tuple of (posts_list, user_id/secUid)
         """
+        # Sanitize input: strip @ symbol, whitespace, and convert to lowercase
         username = username.lstrip("@").strip().lower()
 
         logger.info(f"Fetching posts for @{username} via tiktok-api23...")
 
+        # tiktok-api23 requires parameter named 'uniqueId', not 'username'
         params = {
-            "username": username,
+            "uniqueId": username,
             "count": min(max_posts, 35)
         }
 
