@@ -997,10 +997,13 @@ def main():
             
             for i, (_, profile) in enumerate(profiles_df.head(8).iterrows()):
                 with cols[i % 4]:
+                    # Construct TikTok profile URL
+                    profile_url = f"https://www.tiktok.com/@{profile['username']}"
+
                     st.markdown(f"""
                     <div class="metric-card">
                         <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">
-                            @{profile['username']}
+                            <a href="{profile_url}" target="_blank" style="text-decoration: none; color: inherit;">@{profile['username']} 🔗</a>
                         </div>
                         <div class="metric-value">{format_number(profile['followers'])}</div>
                         <div class="metric-label">Followers</div>
