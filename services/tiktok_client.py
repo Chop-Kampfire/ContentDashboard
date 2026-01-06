@@ -449,26 +449,39 @@ class TikTokClient:
             logger.warning(f"Unexpected posts response format: {type(posts_list)}")
             posts_list = []
 
+        logger.info(f"📦 Received {len(posts_list)} posts from API")
+
         cutoff_date = datetime.utcnow() - timedelta(days=days_back)
         posts = []
 
-        for item in posts_list:
+        for idx, item in enumerate(posts_list):
             try:
                 # Parse timestamp (tiktok-api23 uses createTime)
                 create_time = item.get("createTime", item.get("create_time", 0))
 
+                # DEBUG: Log raw timestamp from first post
+                if idx == 0:
+                    logger.debug(f"🔍 Raw timestamp from first post: {create_time} (type: {type(create_time)})")
+                    logger.debug(f"🔍 Full first post keys: {list(item.keys())}")
+
                 if isinstance(create_time, str):
                     try:
                         posted_at = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-                    except:
+                    except Exception as e:
+                        logger.warning(f"Failed to parse ISO timestamp '{create_time}': {e}")
                         posted_at = datetime.utcnow()
                 else:
                     # Unix timestamp
-                    posted_at = datetime.utcfromtimestamp(int(create_time)) if create_time else datetime.utcnow()
+                    try:
+                        posted_at = datetime.utcfromtimestamp(int(create_time)) if create_time else datetime.utcnow()
+                    except Exception as e:
+                        logger.warning(f"Failed to parse Unix timestamp '{create_time}': {e}")
+                        posted_at = datetime.utcnow()
 
-                # Skip old posts
-                if posted_at < cutoff_date:
-                    continue
+                # TEMPORARILY DISABLED: Skip old posts for debugging
+                # if posted_at < cutoff_date:
+                #     logger.debug(f"Skipping post from {posted_at} (older than cutoff {cutoff_date})")
+                #     continue
 
                 # Extract stats (tiktok-api23 structure)
                 stats = item.get("stats", {})
@@ -489,15 +502,23 @@ class TikTokClient:
 
                 posts.append(post)
 
+                # DEBUG: Log first post details
+                if idx == 0:
+                    logger.debug(f"🔍 First post parsed: ID={post.post_id}, views={post.view_count}, date={post.posted_at}")
+
             except Exception as e:
-                logger.warning(f"Failed to parse post: {e}")
+                logger.warning(f"Failed to parse post {idx}: {e}")
                 logger.debug(f"Problematic post data: {item}")
                 continue
 
         # Sort by posted date (newest first)
         posts.sort(key=lambda p: p.posted_at, reverse=True)
 
-        logger.info(f"✅ Parsed {len(posts)} posts from last {days_back} days")
+        logger.info(f"✅ Parsed {len(posts)} posts (date filter temporarily disabled for debugging)")
+
+        if posts:
+            logger.info(f"   Newest post: {posts[0].posted_at}, Oldest post: {posts[-1].posted_at}")
+
         return posts
     
     def _extract_video_url(self, item: dict) -> str:

@@ -190,6 +190,8 @@ class TikTokScraper(BaseScraper):
         # Calculate average views
         avg_views = self._calculate_average_views(posts_data)
 
+        logger.info(f"📊 Calculated avg views: {avg_views:,.0f} from {len(posts_data)} posts")
+
         # Save to database (including secUid for future use)
         with get_db_context() as db:
             profile = Profile(
@@ -207,7 +209,9 @@ class TikTokScraper(BaseScraper):
             )
             db.add(profile)
             db.flush()  # Get the ID
-            
+
+            logger.info(f"💾 Saved profile with ID: {profile.id}")
+
             # Create initial history record
             history = ProfileHistory(
                 profile_id=profile.id,
@@ -220,21 +224,28 @@ class TikTokScraper(BaseScraper):
                 recorded_at=datetime.utcnow()
             )
             db.add(history)
-            
+
             # Insert posts
+            logger.info(f"💾 Saving {len(posts_data)} posts to database...")
+            posts_saved = 0
             for post_data in posts_data:
                 post = self._create_post_record(profile.id, post_data, avg_views)
                 db.add(post)
-            
+                posts_saved += 1
+
+            logger.debug(f"   Added {posts_saved} post records to session")
+
             db.commit()
-            
+
+            logger.info(f"✅ Database commit successful - profile and {posts_saved} posts saved")
+
             # Capture values BEFORE session closes (fix for detached instance error)
             saved_username = profile.username
             saved_follower_count = profile.follower_count
-            
+
             logger.info(
                 f"✅ Added @{username} | "
-                f"user_id: {user_id} | "
+                f"secUid: {user_id[:20]}... | "
                 f"{profile.follower_count:,} followers | "
                 f"{len(posts_data)} posts | "
                 f"Avg views: {avg_views:,.0f}"
@@ -556,10 +567,18 @@ class TikTokScraper(BaseScraper):
     def _calculate_average_views(self, posts: list[TikTokPost]) -> float:
         """Calculate mean view count from list of posts."""
         if not posts:
+            logger.warning("⚠️  No posts provided for average calculation")
             return 0.0
-        
+
         view_counts = [p.view_count for p in posts if p.view_count > 0]
-        return mean(view_counts) if view_counts else 0.0
+
+        if not view_counts:
+            logger.warning(f"⚠️  All {len(posts)} posts have 0 views - average will be 0")
+            return 0.0
+
+        avg = mean(view_counts)
+        logger.debug(f"📊 Average calculation: {len(view_counts)} posts with views, avg = {avg:,.0f}")
+        return avg
     
     def _create_post_record(
         self,
@@ -569,10 +588,12 @@ class TikTokScraper(BaseScraper):
     ) -> Post:
         """Create a Post database record from TikTok post data."""
         is_viral = post_data.view_count > (avg_views * self.viral_threshold)
-        
-        return Post(
+
+        post = Post(
             profile_id=profile_id,
-            tiktok_post_id=post_data.post_id,
+            platform='tiktok',  # Set platform for multi-platform support
+            platform_post_id=post_data.post_id,  # Use platform_post_id for consistency
+            tiktok_post_id=post_data.post_id,  # Keep legacy column for backward compatibility
             description=post_data.description,
             video_url=post_data.video_url,
             thumbnail_url=post_data.thumbnail_url,
@@ -585,6 +606,10 @@ class TikTokScraper(BaseScraper):
             viral_alert_sent=False,
             posted_at=post_data.posted_at
         )
+
+        logger.debug(f"   📝 Created post record: {post_data.post_id[:15]}... views={post_data.view_count:,}, viral={is_viral}")
+
+        return post
     
     async def _upsert_post(
         self,
