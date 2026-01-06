@@ -168,16 +168,17 @@ class TikTokScraper(BaseScraper):
                 logger.warning(f"Profile @{username} already exists, updating instead")
                 return await self.update_profile(username)
         
-        # Step 1: Fetch profile (gets user_id)
+        # Step 1: Fetch profile (gets secUid)
         try:
             profile_data = await self.tiktok.fetch_profile(username)
-            user_id = profile_data.user_id
-            
-            logger.info(f"📋 Got profile for @{username}, user_id: {user_id}")
-            
-            # Step 2: Fetch posts using user_id (correct ScrapTik method)
+            user_id = profile_data.user_id  # This is the secUid from tiktok-api23
+
+            logger.debug(f"🔍 Found secUid: {user_id}")
+            logger.info(f"📋 Got profile for @{username}, secUid: {user_id[:20] if user_id else 'N/A'}...")
+
+            # Step 2: Fetch posts using secUid (tiktok-api23 method)
             posts_data = await self.tiktok.fetch_recent_posts_by_id(
-                user_id=user_id,
+                user_id=user_id,  # Pass secUid
                 max_posts=50,
                 days_back=self.lookback_days
             )
@@ -188,11 +189,11 @@ class TikTokScraper(BaseScraper):
         
         # Calculate average views
         avg_views = self._calculate_average_views(posts_data)
-        
-        # Save to database (including user_id for future use)
+
+        # Save to database (including secUid for future use)
         with get_db_context() as db:
             profile = Profile(
-                tiktok_user_id=user_id,  # IMPORTANT: Save user_id
+                tiktok_user_id=user_id,  # IMPORTANT: Save secUid for subsequent API calls
                 username=profile_data.username,
                 display_name=profile_data.display_name,
                 bio=profile_data.bio,
@@ -284,21 +285,23 @@ class TikTokScraper(BaseScraper):
         
         # Fetch fresh data
         try:
-            # Step 1: Fetch profile (also updates user_id if it changed)
+            # Step 1: Fetch profile (also updates secUid if it changed)
             profile_data = await self.tiktok.fetch_profile(username)
-            user_id = profile_data.user_id
-            
-            # Step 2: Fetch posts using user_id
-            # Use cached user_id if available, otherwise use the one from profile fetch
+            user_id = profile_data.user_id  # This is the secUid
+
+            logger.debug(f"🔍 Found secUid: {user_id}")
+
+            # Step 2: Fetch posts using secUid
+            # Use cached secUid if available, otherwise use the one from profile fetch
             effective_user_id = cached_user_id or user_id
-            
+
             if cached_user_id:
-                logger.info(f"Using cached user_id for @{username}: {cached_user_id}")
+                logger.info(f"Using cached secUid for @{username}: {cached_user_id[:20]}...")
             else:
-                logger.info(f"No cached user_id, using fetched: {user_id}")
-            
+                logger.info(f"No cached secUid, using fetched: {user_id[:20]}...")
+
             posts_data = await self.tiktok.fetch_recent_posts_by_id(
-                user_id=effective_user_id,
+                user_id=effective_user_id,  # Pass secUid
                 max_posts=50,
                 days_back=self.lookback_days
             )
@@ -312,9 +315,9 @@ class TikTokScraper(BaseScraper):
         
         with get_db_context() as db:
             profile = db.query(Profile).filter(Profile.id == profile_id).first()
-            
-            # Update profile metrics (including user_id in case it changed)
-            profile.tiktok_user_id = user_id  # Always update to latest
+
+            # Update profile metrics (including secUid in case it changed)
+            profile.tiktok_user_id = user_id  # Always update to latest secUid
             profile.display_name = profile_data.display_name
             profile.bio = profile_data.bio
             profile.avatar_url = profile_data.avatar_url
@@ -396,18 +399,21 @@ class TikTokScraper(BaseScraper):
         try:
             # Fetch fresh profile data
             profile_data = await self.tiktok.fetch_profile(username)
-            
-            # Use cached user_id for posts (skip username-to-id conversion!)
+            user_id = profile_data.user_id  # This is the secUid
+
+            logger.debug(f"🔍 Found secUid: {user_id}")
+
+            # Use cached secUid for posts (more efficient)
             if cached_user_id:
-                logger.info(f"📦 Using cached user_id: {cached_user_id}")
+                logger.info(f"📦 Using cached secUid: {cached_user_id[:20]}...")
                 posts_data = await self.tiktok.fetch_recent_posts_by_id(
-                    user_id=cached_user_id,
+                    user_id=cached_user_id,  # Pass secUid
                     max_posts=50,
                     days_back=self.lookback_days
                 )
             else:
-                # No cached ID, need to do full 2-step process
-                logger.info(f"⚠️ No cached user_id, fetching with username")
+                # No cached secUid, need to do full 2-step process
+                logger.info(f"⚠️ No cached secUid, fetching with username")
                 posts_data, new_user_id = await self.tiktok.fetch_recent_posts(
                     username=username,
                     max_posts=50,
@@ -421,12 +427,12 @@ class TikTokScraper(BaseScraper):
         
         # Calculate new average
         new_avg_views = self._calculate_average_views(posts_data)
-        
+
         with get_db_context() as db:
             profile = db.query(Profile).filter(Profile.id == profile_id).first()
-            
-            # Update all fields
-            profile.tiktok_user_id = cached_user_id or profile_data.user_id
+
+            # Update all fields (including secUid)
+            profile.tiktok_user_id = cached_user_id or user_id  # Store secUid
             profile.display_name = profile_data.display_name
             profile.bio = profile_data.bio
             profile.avatar_url = profile_data.avatar_url

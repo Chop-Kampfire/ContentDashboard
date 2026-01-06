@@ -263,31 +263,48 @@ class TikTokClient:
         data = await self._make_request("/api/user/info", params)
 
         try:
-            # tiktok-api23 response structure
-            user_info = data.get("data", {})
-            user = user_info.get("user", user_info)
-            stats = user_info.get("stats", {})
+            # tiktok-api23 response structure - handle multiple possible formats
+            # Format 1: data.userInfo.user.secUid
+            # Format 2: data.data.user.secUid
+
+            # Try both possible response structures
+            user_info = data.get("userInfo") or data.get("data", {})
+            user = user_info.get("user", {}) if isinstance(user_info, dict) else {}
+            stats = user_info.get("stats", {}) if isinstance(user_info, dict) else {}
+
+            # If user is empty, try alternative path
+            if not user:
+                user = user_info if isinstance(user_info, dict) else {}
 
             # CRITICAL: Extract secUid for posts endpoint
-            # Try multiple locations in the response
+            # Try all possible locations according to Lundehund docs
             sec_uid = (
                 user.get("secUid") or
                 user.get("sec_uid") or
                 user_info.get("secUid") or
                 user_info.get("sec_uid") or
                 data.get("secUid") or
+                data.get("userInfo", {}).get("user", {}).get("secUid") or
+                data.get("data", {}).get("user", {}).get("secUid") or
                 ""
             )
+
+            # Debug logging to trace extraction
+            logger.debug(f"🔍 Response structure for @{username}:")
+            logger.debug(f"  - data keys: {list(data.keys())}")
+            logger.debug(f"  - user_info keys: {list(user_info.keys()) if isinstance(user_info, dict) else 'N/A'}")
+            logger.debug(f"  - user keys: {list(user.keys()) if isinstance(user, dict) else 'N/A'}")
 
             # Defensive check: secUid is required for fetching posts
             if not sec_uid:
                 logger.error(f"❌ Failed to extract secUid from profile response for @{username}")
-                logger.debug(f"Response structure: data keys={list(data.keys())}, user keys={list(user.keys())}")
+                logger.error(f"Full response data: {data}")
                 raise TikTokAPIError(
                     f"Missing secUid in profile response for @{username}. "
                     f"Cannot fetch posts without secUid."
                 )
 
+            logger.debug(f"🔍 Found secUid: {sec_uid}")
             logger.info(f"✅ Extracted secUid for @{username}: {sec_uid[:20]}...")
 
             # Extract avatar URL
@@ -353,6 +370,7 @@ class TikTokClient:
             )
 
         sec_uid = str(user_id).strip()
+        logger.debug(f"🔍 Found secUid: {sec_uid}")
         logger.info(f"Fetching posts for secUid: {sec_uid[:20]}... (tiktok-api23)")
 
         # tiktok-api23 requires exact parameter name 'secUid'
@@ -360,6 +378,7 @@ class TikTokClient:
             "secUid": sec_uid,
             "count": min(max_posts, 35)  # API limit
         }
+        logger.debug(f"🔍 Posts API params: {params}")
 
         data = await self._make_request("/api/user/posts", params)
 
