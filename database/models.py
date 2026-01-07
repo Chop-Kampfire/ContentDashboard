@@ -1,7 +1,7 @@
 """
 Pulse - Multi-Platform Analytics Dashboard
 Database Models (SQLAlchemy ORM)
-Version 0.0.2 - Supports TikTok, Twitter/X, and Reddit
+Version 0.0.3 - Railway Deployment with Automatic Migrations
 """
 
 from datetime import datetime
@@ -49,11 +49,11 @@ class Profile(Base):
     
     # Platform identification
     platform = Column(String(32), nullable=False, default=Platform.TIKTOK, index=True)
-    platform_user_id = Column(String(64), nullable=True)  # Platform's internal ID
+    platform_user_id = Column(String(255), nullable=True)  # Platform's internal ID (secUid for TikTok)
     username = Column(String(64), nullable=False, index=True)  # @handle
-    
+
     # Legacy column - kept for backwards compatibility during migration
-    tiktok_user_id = Column(String(64), nullable=True)
+    tiktok_user_id = Column(String(255), nullable=True)  # TikTok secUid (increased to 255 for long identifiers)
     
     # User categorization
     user_role = Column(String(32), nullable=True, default=UserRole.CREATOR)
@@ -150,10 +150,10 @@ class Post(Base):
     
     # Platform identification
     platform = Column(String(32), nullable=False, default=Platform.TIKTOK, index=True)
-    platform_post_id = Column(String(64), nullable=True, index=True)  # Platform's post ID
-    
+    platform_post_id = Column(String(255), nullable=True, index=True)  # Platform's post ID (increased to 255 for long IDs)
+
     # Legacy column - kept for backwards compatibility during migration
-    tiktok_post_id = Column(String(64), nullable=True)
+    tiktok_post_id = Column(String(255), nullable=True)  # Increased to 255 for long identifiers
     
     # Content info (common across platforms)
     description = Column(Text, nullable=True)  # Caption/text/title

@@ -1,3 +1,3 @@
 web: bash start.sh
-worker: python worker.py
+worker: bash start-worker.sh
 
