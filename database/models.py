@@ -247,16 +247,54 @@ class AlertLog(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     post_id = Column(Integer, ForeignKey('posts.id', ondelete='SET NULL'), nullable=True)
     profile_id = Column(Integer, ForeignKey('profiles.id', ondelete='SET NULL'), nullable=True)
-    
+
     # Platform for context
     platform = Column(String(32), nullable=True)
-    
+
     alert_type = Column(String(32), nullable=False)  # 'viral_post', 'milestone', etc.
     message = Column(Text, nullable=False)
-    
+
     sent_at = Column(DateTime, default=datetime.utcnow)
     success = Column(Boolean, default=True)
     error_message = Column(Text, nullable=True)
 
     def __repr__(self):
         return f"<AlertLog {self.alert_type} | {self.sent_at}>"
+
+
+# =============================================================================
+# SUBREDDIT TRAFFIC MODEL
+# =============================================================================
+
+class SubredditTraffic(Base):
+    """
+    Stores daily Reddit subreddit traffic statistics.
+    Fetched via PRAW (Reddit API) on a daily cron schedule.
+    """
+    __tablename__ = 'subreddit_traffic'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Subreddit identification
+    subreddit_name = Column(String(128), nullable=False, index=True)
+
+    # Traffic date (unique per subreddit per day)
+    timestamp = Column(DateTime, nullable=False, index=True)
+
+    # Traffic metrics
+    unique_visitors = Column(Integer, default=0)  # Unique visitors for the day
+    pageviews = Column(Integer, default=0)  # Total page views for the day
+    subscriptions = Column(Integer, default=0)  # Net new subscribers for the day
+
+    # Tracking
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Unique constraint on subreddit + date to support upsert pattern
+    __table_args__ = (
+        UniqueConstraint('subreddit_name', 'timestamp', name='uq_subreddit_traffic_date'),
+        Index('idx_subreddit_traffic_lookup', 'subreddit_name', 'timestamp'),
+    )
+
+    def __repr__(self):
+        return f"<SubredditTraffic r/{self.subreddit_name} | {self.timestamp} | {self.pageviews:,} views>"

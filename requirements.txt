@@ -1,4 +1,4 @@
-# Pulse - TikTok Analytics Dashboard
+# Pulse - Multi-Platform Analytics Dashboard
 # Python 3.10+
 
 # Web Framework
@@ -18,6 +18,13 @@ plotly>=5.18.0
 
 # Background Worker
 apscheduler>=3.10.4
+
+# Web Scraping (Reddit traffic)
+beautifulsoup4>=4.12.0
+
+# Google Sheets Integration
+gspread>=5.12.0
+google-auth>=2.23.0
 
 # Utilities
 python-dotenv>=1.0.0

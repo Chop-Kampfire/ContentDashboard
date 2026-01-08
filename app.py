@@ -22,7 +22,7 @@ from sqlalchemy import create_engine, func, desc, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from database.models import Base, Profile, ProfileHistory, Post, PostHistory, AlertLog
+from database.models import Base, Profile, ProfileHistory, Post, PostHistory, AlertLog, SubredditTraffic
 from services.logger import get_logger, setup_root_logger
 
 # Initialize logging
@@ -583,6 +583,68 @@ def get_aggregate_stats() -> dict:
         session.close()
 
 
+@st.cache_data(ttl=300)
+def get_reddit_traffic(subreddit_name: Optional[str] = None, days: int = 30) -> pd.DataFrame:
+    """
+    Fetch Reddit traffic data from the database.
+
+    Args:
+        subreddit_name: Filter by subreddit (None for all)
+        days: Number of days of history to fetch
+
+    Returns:
+        DataFrame with columns: date, subreddit, unique_visitors, pageviews, subscriptions
+    """
+    session = get_session()
+    if not session:
+        return pd.DataFrame()
+
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+
+        query = session.query(SubredditTraffic).filter(
+            SubredditTraffic.timestamp >= cutoff
+        )
+
+        if subreddit_name:
+            query = query.filter(SubredditTraffic.subreddit_name == subreddit_name)
+
+        traffic = query.order_by(SubredditTraffic.timestamp.desc()).all()
+
+        data = [{
+            "date": t.timestamp,
+            "subreddit": t.subreddit_name,
+            "unique_visitors": t.unique_visitors,
+            "pageviews": t.pageviews,
+            "subscriptions": t.subscriptions,
+        } for t in traffic]
+
+        logger.debug(f"Fetched {len(data)} Reddit traffic records")
+        return pd.DataFrame(data)
+    except Exception as e:
+        logger.error(f"Error fetching Reddit traffic: {e}")
+        return pd.DataFrame()
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=300)
+def get_reddit_subreddits() -> list[str]:
+    """Get list of subreddits with traffic data."""
+    session = get_session()
+    if not session:
+        return []
+
+    try:
+        result = session.query(SubredditTraffic.subreddit_name).distinct().all()
+        return [r[0] for r in result]
+    except Exception as e:
+        logger.error(f"Error fetching subreddit list: {e}")
+        return []
+    finally:
+        session.close()
+
+
 # =============================================================================
 # CHART FUNCTIONS
 # =============================================================================
@@ -798,7 +860,105 @@ def create_efficacy_gauge(score: float) -> go.Figure:
         margin=dict(l=20, r=20, t=20, b=20),
         height=200
     )
-    
+
+    return fig
+
+
+def create_reddit_traffic_chart(df: pd.DataFrame, metric: str = "pageviews") -> go.Figure:
+    """
+    Create a line chart for Reddit traffic data.
+
+    Args:
+        df: DataFrame with date, subreddit, and traffic metrics
+        metric: Which metric to display ('pageviews', 'unique_visitors', 'subscriptions')
+
+    Returns:
+        Plotly figure
+    """
+    if df.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No Reddit traffic data available yet. Run the sync script to fetch data.",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14, color='#888')
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            height=400
+        )
+        return fig
+
+    # Sort by date
+    df_sorted = df.sort_values('date')
+
+    # Get unique subreddits for multi-line support
+    subreddits = df_sorted['subreddit'].unique()
+
+    colors = ['#ff4500', '#00d4aa', '#ffd93d', '#a78bfa', '#60a5fa', '#f472b6']
+
+    fig = go.Figure()
+
+    metric_labels = {
+        'pageviews': 'Page Views',
+        'unique_visitors': 'Unique Visitors',
+        'subscriptions': 'Net Subscriptions'
+    }
+
+    for i, subreddit in enumerate(subreddits):
+        sub_df = df_sorted[df_sorted['subreddit'] == subreddit]
+        color = colors[i % len(colors)]
+
+        fig.add_trace(go.Scatter(
+            x=sub_df['date'],
+            y=sub_df[metric],
+            mode='lines+markers',
+            name=f"r/{subreddit}",
+            line=dict(color=color, width=2.5),
+            marker=dict(size=6),
+            fill='tozeroy',
+            fillcolor=f"rgba{tuple(int(color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (0.1,)}"
+        ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="Outfit, sans-serif", color="#a0a0b0"),
+        title=dict(
+            text=f"Reddit Traffic - {metric_labels.get(metric, metric)}",
+            font=dict(size=18, color="#ffffff"),
+            x=0
+        ),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.1)',
+            title=""
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.1)',
+            title=metric_labels.get(metric, metric),
+            tickformat=",d"
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+            bgcolor='rgba(0,0,0,0)'
+        ),
+        hovermode="x unified",
+        margin=dict(l=0, r=0, t=60, b=0),
+        height=400
+    )
+
     return fig
 
 
@@ -909,7 +1069,7 @@ def main():
     stats = get_aggregate_stats()
     
     # Create tabs
-    tab1, tab2, tab3 = st.tabs(["📈 Overview", "🎬 Post Performance", "⚙️ Watchlist Management"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Overview", "🎬 Post Performance", "🔴 Reddit", "⚙️ Watchlist Management"])
     
     # =========================================================================
     # TAB 1: OVERVIEW
@@ -1161,11 +1321,133 @@ def main():
                             height=250
                         )
                         st.plotly_chart(fig, use_container_width=True)
-    
+
     # =========================================================================
-    # TAB 3: WATCHLIST MANAGEMENT
+    # TAB 3: REDDIT ANALYTICS
     # =========================================================================
     with tab3:
+        st.markdown("### Reddit Subreddit Traffic")
+
+        # Fetch Reddit traffic data
+        reddit_df = get_reddit_traffic(days=30)
+        subreddits = get_reddit_subreddits()
+
+        if reddit_df.empty:
+            st.info(
+                "No Reddit traffic data available yet. "
+                "Set up the Reddit sync service to start tracking subreddit traffic."
+            )
+
+            st.markdown("---")
+            st.markdown("#### Setup Instructions")
+
+            st.markdown("""
+            To enable Reddit traffic analytics:
+
+            **1. Set Environment Variables:**
+            ```
+            REDDIT_CLIENT_ID=your_client_id
+            REDDIT_CLIENT_SECRET=your_client_secret
+            REDDIT_USERNAME=your_reddit_username
+            REDDIT_PASSWORD=your_reddit_password
+            REDDIT_SUBREDDIT=your_subreddit_name
+            ```
+
+            **2. Run the Sync Script:**
+            ```bash
+            python -m services.reddit_sync
+            ```
+
+            **3. Set Up Railway Cron (Optional):**
+            Add a cron job with schedule `0 0 * * *` to run daily at midnight UTC.
+
+            **Note:** You must be a moderator of the subreddit to access traffic statistics.
+            """)
+
+        else:
+            # Subreddit selector
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                if len(subreddits) > 1:
+                    selected_sub = st.selectbox(
+                        "Select Subreddit",
+                        options=["All"] + subreddits,
+                        format_func=lambda x: f"r/{x}" if x != "All" else "All Subreddits"
+                    )
+                else:
+                    selected_sub = subreddits[0] if subreddits else None
+                    if selected_sub:
+                        st.markdown(f"**Subreddit:** r/{selected_sub}")
+
+            with col2:
+                metric_choice = st.selectbox(
+                    "Metric",
+                    options=["pageviews", "unique_visitors", "subscriptions"],
+                    format_func=lambda x: {
+                        "pageviews": "📊 Page Views",
+                        "unique_visitors": "👥 Unique Visitors",
+                        "subscriptions": "📈 Net Subscriptions"
+                    }.get(x, x)
+                )
+
+            # Filter data if specific subreddit selected
+            if selected_sub and selected_sub != "All":
+                filtered_df = reddit_df[reddit_df['subreddit'] == selected_sub]
+            else:
+                filtered_df = reddit_df
+
+            # Summary metrics
+            st.markdown("---")
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                total_pageviews = filtered_df['pageviews'].sum() if not filtered_df.empty else 0
+                st.metric("Total Page Views", format_number(total_pageviews))
+
+            with col2:
+                total_visitors = filtered_df['unique_visitors'].sum() if not filtered_df.empty else 0
+                st.metric("Total Visitors", format_number(total_visitors))
+
+            with col3:
+                net_subs = filtered_df['subscriptions'].sum() if not filtered_df.empty else 0
+                delta_color = "normal" if net_subs >= 0 else "inverse"
+                st.metric("Net Subscriptions", f"{net_subs:+,}", delta_color=delta_color)
+
+            with col4:
+                days_of_data = len(filtered_df) if not filtered_df.empty else 0
+                st.metric("Days Tracked", days_of_data)
+
+            # Traffic chart
+            st.markdown("---")
+            fig = create_reddit_traffic_chart(filtered_df, metric=metric_choice)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Data table
+            st.markdown("---")
+            st.markdown("#### Traffic History")
+
+            if not filtered_df.empty:
+                display_df = filtered_df.copy()
+                display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d')
+                display_df['subreddit'] = display_df['subreddit'].apply(lambda x: f"r/{x}")
+                display_df['pageviews'] = display_df['pageviews'].apply(lambda x: f"{x:,}")
+                display_df['unique_visitors'] = display_df['unique_visitors'].apply(lambda x: f"{x:,}")
+                display_df['subscriptions'] = display_df['subscriptions'].apply(lambda x: f"{x:+,}")
+
+                display_df.columns = ['Date', 'Subreddit', 'Unique Visitors', 'Page Views', 'Net Subs']
+
+                st.dataframe(
+                    display_df,
+                    use_container_width=True,
+                    height=400,
+                    hide_index=True
+                )
+
+    # =========================================================================
+    # TAB 4: WATCHLIST MANAGEMENT
+    # =========================================================================
+    with tab4:
         st.markdown("### Manage Your Watchlist")
         
         col1, col2 = st.columns(2)
