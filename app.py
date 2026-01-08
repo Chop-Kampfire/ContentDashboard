@@ -197,20 +197,42 @@ st.markdown("""
         box-shadow: 0 4px 16px rgba(0, 212, 170, 0.3);
     }
     
-    /* Input styling */
+    /* Input styling - Creamy/Eggshell for readability */
     .stTextInput > div > div > input {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
+        background: #f5f5dc !important;
+        border: 2px solid #d4d4b8 !important;
         border-radius: 8px;
-        color: var(--text-primary);
+        color: #2a2a2a !important;
         font-family: 'Outfit', sans-serif;
+        padding: 0.5rem !important;
     }
-    
-    /* Selectbox styling */
+
+    .stTextInput > div > div > input:focus {
+        background: #fafaed !important;
+        border: 2px solid #00d4aa !important;
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.2);
+    }
+
+    .stTextInput > div > div > input::placeholder {
+        color: #8a8a7a !important;
+        opacity: 0.7;
+    }
+
+    /* Selectbox styling - Creamy/Eggshell for readability */
     .stSelectbox > div > div {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
+        background: #f5f5dc !important;
+        border: 2px solid #d4d4b8 !important;
         border-radius: 8px;
+    }
+
+    .stSelectbox > div > div > div {
+        color: #2a2a2a !important;
+    }
+
+    .stSelectbox > div > div:focus-within {
+        border: 2px solid #00d4aa !important;
+        box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.2);
     }
     
     /* Sidebar */
@@ -1326,42 +1348,124 @@ def main():
     # TAB 3: REDDIT ANALYTICS
     # =========================================================================
     with tab3:
-        st.markdown("### Reddit Subreddit Traffic")
+        col_header, col_button = st.columns([3, 1])
+
+        with col_header:
+            st.markdown("### Reddit Subreddit Traffic")
+
+        with col_button:
+            st.write("")  # Spacing
+            sync_button = st.button("🔄 Sync Reddit Data", use_container_width=True)
+
+        # Handle manual sync
+        if sync_button:
+            with st.spinner("Syncing Reddit traffic data for PythNetwork..."):
+                try:
+                    from services.reddit_sync import sync_reddit_traffic
+
+                    # Get subreddit from env or default to PythNetwork
+                    subreddit = os.getenv("REDDIT_SUBREDDIT", "PythNetwork")
+
+                    # Run the sync
+                    success = sync_reddit_traffic(subreddit_name=subreddit)
+
+                    if success:
+                        st.success(f"✅ Successfully synced r/{subreddit} traffic data!")
+                        # Clear cache to show new data
+                        get_reddit_traffic.clear()
+                        get_reddit_subreddits.clear()
+                        st.rerun()
+                    else:
+                        st.error("❌ Sync failed. Check logs for details.")
+
+                except ValueError as e:
+                    st.error(f"❌ Configuration Error: {str(e)}")
+                    st.info(
+                        "**Required Environment Variables:**\n"
+                        "- `REDDIT_SESSION_COOKIE` - Your Reddit session cookie\n"
+                        "- `REDDIT_SUBREDDIT` - Subreddit name (default: PythNetwork)\n"
+                        "- `GOOGLE_SHEETS_CREDENTIALS` - Google service account JSON\n"
+                        "- `DATABASE_URL` - PostgreSQL connection string"
+                    )
+                except PermissionError as e:
+                    st.error(f"❌ Permission Denied: {str(e)}")
+                    st.warning(
+                        "Make sure:\n"
+                        "1. You're a moderator of the subreddit\n"
+                        "2. Your Reddit session cookie is valid and not expired\n"
+                        "3. You have access to the traffic statistics page"
+                    )
+                except Exception as e:
+                    st.error(f"❌ Unexpected Error: {str(e)}")
+                    logger.error(f"Reddit sync error: {e}", exc_info=True)
+
+        # Display sync status
+        st.markdown("---")
+        status_col1, status_col2, status_col3 = st.columns(3)
+
+        with status_col1:
+            subreddit_name = os.getenv("REDDIT_SUBREDDIT", "PythNetwork")
+            st.markdown(f"**Tracked Subreddit:** r/{subreddit_name}")
+
+        with status_col2:
+            session_cookie = os.getenv("REDDIT_SESSION_COOKIE", "")
+            cookie_status = "🟢 Set" if session_cookie else "🔴 Not Set"
+            st.markdown(f"**Session Cookie:** {cookie_status}")
+
+        with status_col3:
+            sheets_creds = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
+            sheets_status = "🟢 Configured" if sheets_creds else "🔴 Not Set"
+            st.markdown(f"**Google Sheets:** {sheets_status}")
 
         # Fetch Reddit traffic data
         reddit_df = get_reddit_traffic(days=30)
         subreddits = get_reddit_subreddits()
 
+        # Show last sync time if data exists
+        if not reddit_df.empty:
+            latest_date = reddit_df['date'].max()
+            st.markdown(f"**Last Data Point:** {pd.to_datetime(latest_date).strftime('%Y-%m-%d')}")
+
         if reddit_df.empty:
             st.info(
-                "No Reddit traffic data available yet. "
-                "Set up the Reddit sync service to start tracking subreddit traffic."
+                "No Reddit traffic data available yet. Click '🔄 Sync Reddit Data' above to fetch data, "
+                "or set up environment variables first if the button shows errors."
             )
 
             st.markdown("---")
-            st.markdown("#### Setup Instructions")
+            st.markdown("#### 🔧 Setup Instructions")
 
             st.markdown("""
-            To enable Reddit traffic analytics:
+            To enable Reddit traffic analytics, set these environment variables in Railway:
 
-            **1. Set Environment Variables:**
-            ```
-            REDDIT_CLIENT_ID=your_client_id
-            REDDIT_CLIENT_SECRET=your_client_secret
-            REDDIT_USERNAME=your_reddit_username
-            REDDIT_PASSWORD=your_reddit_password
-            REDDIT_SUBREDDIT=your_subreddit_name
+            **Required Variables:**
+            ```bash
+            REDDIT_SESSION_COOKIE=your_reddit_session_cookie
+            REDDIT_SUBREDDIT=PythNetwork
+            GOOGLE_SHEETS_CREDENTIALS={"type":"service_account",...}
+            GOOGLE_SPREADSHEET_ID=19zkdmjds3b1F6IYY7U5ehQ_HeoBxy9kXUABBTm-U7T0
+            DATABASE_URL=postgresql://... (should already be set)
             ```
 
-            **2. Run the Sync Script:**
+            **How to Get Reddit Session Cookie:**
+            1. Log into Reddit in your browser
+            2. Open DevTools (F12) → Application/Storage → Cookies
+            3. Find `reddit_session` cookie value
+            4. Copy the entire value (starts with numbers and letters)
+
+            **Important:**
+            - You must be a **moderator** of r/{subreddit_name} to access traffic statistics
+            - Session cookies expire after ~1 year, you'll need to update them
+            - Google Sheets acts as the source of truth for Reddit data
+
+            **Manual Sync:**
+            Click the "🔄 Sync Reddit Data" button above after setting environment variables.
+
+            **Automated Sync (Optional):**
+            Set up a Railway cron job with schedule `0 0 * * *` to run:
             ```bash
             python -m services.reddit_sync
             ```
-
-            **3. Set Up Railway Cron (Optional):**
-            Add a cron job with schedule `0 0 * * *` to run daily at midnight UTC.
-
-            **Note:** You must be a moderator of the subreddit to access traffic statistics.
             """)
 
         else:
