@@ -36,7 +36,7 @@ import sys
 import json
 import argparse
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -475,7 +475,7 @@ def write_to_spreadsheet(subreddit_name: str, traffic_data: list[dict]) -> int:
                 record["unique_visitors"],
                 record["pageviews"],
                 record["subscriptions"],
-                datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             ])
 
     if not new_rows:
@@ -631,7 +631,7 @@ def sync_reddit_traffic(
 
     logger.info("=" * 60)
     logger.info(f"REDDIT TRAFFIC SYNC - r/{subreddit_name}")
-    logger.info(f"Started at: {datetime.now(datetime.UTC).isoformat()}Z")
+    logger.info(f"Started at: {datetime.now(timezone.utc).isoformat()}Z")
     logger.info(f"Mode: {'Google Sheets Only' if spreadsheet_only else 'Database Only' if database_only else 'Full Sync'}")
     logger.info("=" * 60)
 
@@ -671,7 +671,7 @@ def sync_reddit_traffic(
             logger.info(f"  Google Sheets (new): {spreadsheet_records}")
         if not spreadsheet_only:
             logger.info(f"  Database (upserted): {database_records}")
-        logger.info(f"  Completed at: {datetime.now(datetime.UTC).isoformat()}Z")
+        logger.info(f"  Completed at: {datetime.now(timezone.utc).isoformat()}Z")
         logger.info("=" * 60)
 
         return True

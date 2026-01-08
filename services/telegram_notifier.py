@@ -6,7 +6,7 @@ Telegram Bot Integration for Viral Alerts
 import httpx
 import logging
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import config
 
@@ -123,7 +123,7 @@ class TelegramNotifier:
 
 🔗 <a href="https://www.tiktok.com/@{username}/video/{post_id}">View Post</a>
 
-⏰ Detected: {datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M UTC')}"""
+⏰ Detected: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"""
         
         return await self.send_message(message)
     
@@ -155,7 +155,7 @@ Updates every {config.SCRAPE_INTERVAL_HOURS} hours."""
 Type: <code>{error_type}</code>
 Details: {details}
 
-⏰ {datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M UTC')}"""
+⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"""
         
         return await self.send_message(message)
 

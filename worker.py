@@ -19,7 +19,7 @@ Environment Variables:
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import signal
 import sys
 
@@ -110,7 +110,7 @@ class PulseWorker:
             id="profile_update",
             name="Update All Profiles",
             replace_existing=True,
-            next_run_time=datetime.now(datetime.UTC)  # Run immediately on startup
+            next_run_time=datetime.now(timezone.utc)  # Run immediately on startup
         )
         
         self.scheduler.start()
@@ -126,7 +126,7 @@ class PulseWorker:
                 f"🟢 <b>Pulse Worker Started</b>\n\n"
                 f"Update interval: Every {self.interval_hours} hours\n"
                 f"Schema version: {schema_health.get('schema_version', 'unknown')}\n"
-                f"Time: {datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M UTC')}"
+                f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
             )
         except Exception as e:
             logger.warning(f"Could not send startup notification: {e}")
@@ -141,7 +141,7 @@ class PulseWorker:
         try:
             await self.telegram.send_message(
                 f"🔴 <b>Pulse Worker Stopped</b>\n\n"
-                f"Time: {datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M UTC')}"
+                f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
             )
         except:
             pass
@@ -150,13 +150,13 @@ class PulseWorker:
     
     async def run_update_job(self):
         """Execute the profile update job."""
-        start_time = datetime.now(datetime.UTC)
+        start_time = datetime.now(timezone.utc)
         logger.info(f"Starting scheduled update | time={start_time.isoformat()}")
         
         try:
             results = await update_all_profiles()
             
-            elapsed = (datetime.now(datetime.UTC) - start_time).total_seconds()
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             
             logger.info(
                 f"Update complete | duration={elapsed:.1f}s | "

@@ -10,7 +10,7 @@ Automatic database migrations on Railway deployment.
 import os
 import time
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import streamlit as st
@@ -456,7 +456,7 @@ def get_profile_history(profile_id: int, days: int = 30) -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        cutoff = datetime.now(datetime.UTC) - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         
         history = session.query(ProfileHistory).filter(
             ProfileHistory.profile_id == profile_id,
@@ -484,7 +484,7 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
         return pd.DataFrame()
     
     try:
-        cutoff = datetime.now(datetime.UTC) - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         posts = session.query(Post, Profile).join(
             Profile, Post.profile_id == Profile.id
@@ -577,7 +577,7 @@ def get_aggregate_stats() -> dict:
         total_posts = session.query(func.count(Post.id)).scalar() or 0
         
         # Total views (last 30 days)
-        cutoff = datetime.now(datetime.UTC) - timedelta(days=30)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         total_views = session.query(func.sum(Post.view_count)).filter(
             Post.posted_at >= cutoff
         ).scalar() or 0
@@ -588,7 +588,7 @@ def get_aggregate_stats() -> dict:
         ).scalar() or 0
         
         # Follower growth (24h)
-        yesterday = datetime.now(datetime.UTC) - timedelta(hours=24)
+        yesterday = datetime.now(timezone.utc) - timedelta(hours=24)
         growth_data = session.query(func.sum(ProfileHistory.follower_change)).filter(
             ProfileHistory.recorded_at >= yesterday
         ).scalar() or 0
@@ -622,7 +622,7 @@ def get_reddit_traffic(subreddit_name: Optional[str] = None, days: int = 30) -> 
         return pd.DataFrame()
 
     try:
-        cutoff = datetime.now(datetime.UTC) - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         query = session.query(SubredditTraffic).filter(
             SubredditTraffic.timestamp >= cutoff
