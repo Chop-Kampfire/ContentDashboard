@@ -69,8 +69,10 @@ def setup_root_logger():
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("watchdog").setLevel(logging.WARNING)  # Suppress file watcher debug logs
+    logging.getLogger("watchdog.observers.inotify_buffer").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(
-        logging.DEBUG if os.getenv("SQL_ECHO", "false").lower() == "true" 
+        logging.DEBUG if os.getenv("SQL_ECHO", "false").lower() == "true"
         else logging.WARNING
     )
     

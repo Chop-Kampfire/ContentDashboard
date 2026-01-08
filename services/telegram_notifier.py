@@ -123,7 +123,7 @@ class TelegramNotifier:
 
 🔗 <a href="https://www.tiktok.com/@{username}/video/{post_id}">View Post</a>
 
-⏰ Detected: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"""
+⏰ Detected: {datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M UTC')}"""
         
         return await self.send_message(message)
     
@@ -155,7 +155,7 @@ Updates every {config.SCRAPE_INTERVAL_HOURS} hours."""
 Type: <code>{error_type}</code>
 Details: {details}
 
-⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"""
+⏰ {datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M UTC')}"""
         
         return await self.send_message(message)
 

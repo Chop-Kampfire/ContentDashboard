@@ -454,9 +454,9 @@ def get_profile_history(profile_id: int, days: int = 30) -> pd.DataFrame:
     session = get_session()
     if not session:
         return pd.DataFrame()
-    
+
     try:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(datetime.UTC) - timedelta(days=days)
         
         history = session.query(ProfileHistory).filter(
             ProfileHistory.profile_id == profile_id,
@@ -484,8 +484,8 @@ def get_all_posts(days: int = 30) -> pd.DataFrame:
         return pd.DataFrame()
     
     try:
-        cutoff = datetime.utcnow() - timedelta(days=days)
-        
+        cutoff = datetime.now(datetime.UTC) - timedelta(days=days)
+
         posts = session.query(Post, Profile).join(
             Profile, Post.profile_id == Profile.id
         ).filter(
@@ -577,7 +577,7 @@ def get_aggregate_stats() -> dict:
         total_posts = session.query(func.count(Post.id)).scalar() or 0
         
         # Total views (last 30 days)
-        cutoff = datetime.utcnow() - timedelta(days=30)
+        cutoff = datetime.now(datetime.UTC) - timedelta(days=30)
         total_views = session.query(func.sum(Post.view_count)).filter(
             Post.posted_at >= cutoff
         ).scalar() or 0
@@ -588,7 +588,7 @@ def get_aggregate_stats() -> dict:
         ).scalar() or 0
         
         # Follower growth (24h)
-        yesterday = datetime.utcnow() - timedelta(hours=24)
+        yesterday = datetime.now(datetime.UTC) - timedelta(hours=24)
         growth_data = session.query(func.sum(ProfileHistory.follower_change)).filter(
             ProfileHistory.recorded_at >= yesterday
         ).scalar() or 0
@@ -622,7 +622,7 @@ def get_reddit_traffic(subreddit_name: Optional[str] = None, days: int = 30) -> 
         return pd.DataFrame()
 
     try:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(datetime.UTC) - timedelta(days=days)
 
         query = session.query(SubredditTraffic).filter(
             SubredditTraffic.timestamp >= cutoff
@@ -1157,7 +1157,7 @@ def main():
                 if selected_profiles:
                     profile_names = dict(zip(profiles_df['id'], profiles_df['username']))
                     fig = create_follower_growth_chart(selected_profiles, profile_names)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 else:
                     st.info("Select profiles to view growth chart")
             else:
@@ -1168,7 +1168,7 @@ def main():
             
             if not posts_df.empty:
                 fig = create_post_performance_chart(posts_df)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.info("No posts data available yet.")
         
@@ -1285,7 +1285,7 @@ def main():
 
             st.dataframe(
                 display_df,
-                use_container_width=True,
+                width="stretch",
                 height=500,
                 hide_index=True
             )
@@ -1309,7 +1309,7 @@ def main():
                     with col1:
                         st.markdown("##### Efficacy Score")
                         fig = create_efficacy_gauge(post_data['efficacy_score'])
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
                     
                     with col2:
                         st.markdown("##### Engagement Breakdown")
@@ -1342,7 +1342,7 @@ def main():
                             margin=dict(l=0, r=0, t=20, b=0),
                             height=250
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
 
     # =========================================================================
     # TAB 3: REDDIT ANALYTICS
@@ -1355,7 +1355,7 @@ def main():
 
         with col_button:
             st.write("")  # Spacing
-            sync_button = st.button("🔄 Sync Reddit Data", use_container_width=True)
+            sync_button = st.button("🔄 Sync Reddit Data", width="stretch")
 
         # Handle manual sync
         if sync_button:
@@ -1525,7 +1525,7 @@ def main():
             # Traffic chart
             st.markdown("---")
             fig = create_reddit_traffic_chart(filtered_df, metric=metric_choice)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Data table
             st.markdown("---")
@@ -1543,7 +1543,7 @@ def main():
 
                 st.dataframe(
                     display_df,
-                    use_container_width=True,
+                    width="stretch",
                     height=400,
                     hide_index=True
                 )
@@ -1581,7 +1581,7 @@ def main():
                     help=f"Enter the {platform_choice} username without the @ symbol"
                 )
 
-                submit_add = st.form_submit_button("Add to Watchlist", use_container_width=True)
+                submit_add = st.form_submit_button("Add to Watchlist", width="stretch")
 
                 if submit_add and new_username:
                     with st.spinner(f"Adding @{new_username} ({platform_choice})..."):
@@ -1603,7 +1603,7 @@ def main():
                         format_func=lambda x: f"@{x}"
                     )
                     
-                    submit_remove = st.form_submit_button("Remove from Watchlist", use_container_width=True)
+                    submit_remove = st.form_submit_button("Remove from Watchlist", width="stretch")
                     
                     if submit_remove and remove_username:
                         success, message = remove_profile_from_watchlist(remove_username)
@@ -1632,7 +1632,7 @@ def main():
             watchlist_df['Avg Views'] = watchlist_df['Avg Views'].apply(lambda x: f"{int(x):,}" if x else "0")
             watchlist_df['Last Updated'] = pd.to_datetime(watchlist_df['Last Updated']).dt.strftime('%Y-%m-%d %H:%M')
             
-            st.dataframe(watchlist_df, use_container_width=True, hide_index=True)
+            st.dataframe(watchlist_df, width="stretch", hide_index=True)
         else:
             st.info("Your watchlist is empty. Add TikTok profiles above to start tracking.")
         
@@ -1688,7 +1688,7 @@ def main():
                 reset_button = st.button(
                     "🗑️ Reset",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=(confirm_text != "DELETE ALL DATA")
                 )
 
@@ -1737,7 +1737,7 @@ def render_sidebar():
         st.markdown("---")
         
         # Refresh button
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width="stretch"):
             get_all_profiles.clear()
             get_all_posts.clear()
             get_aggregate_stats.clear()

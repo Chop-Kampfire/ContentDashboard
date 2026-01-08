@@ -205,7 +205,7 @@ class TikTokScraper(BaseScraper):
                 total_likes=profile_data.total_likes,
                 video_count=profile_data.video_count,
                 average_post_views=avg_views,
-                last_scraped_at=datetime.utcnow()
+                last_scraped_at=datetime.now(datetime.UTC)
             )
             db.add(profile)
             db.flush()  # Get the ID
@@ -221,7 +221,7 @@ class TikTokScraper(BaseScraper):
                 video_count=profile.video_count,
                 follower_change=0,
                 likes_change=0,
-                recorded_at=datetime.utcnow()
+                recorded_at=datetime.now(datetime.UTC)
             )
             db.add(history)
 
@@ -337,7 +337,7 @@ class TikTokScraper(BaseScraper):
             profile.total_likes = profile_data.total_likes
             profile.video_count = profile_data.video_count
             profile.average_post_views = new_avg_views
-            profile.last_scraped_at = datetime.utcnow()
+            profile.last_scraped_at = datetime.now(datetime.UTC)
             
             # Create history snapshot
             history = ProfileHistory(
@@ -348,7 +348,7 @@ class TikTokScraper(BaseScraper):
                 video_count=profile.video_count,
                 follower_change=profile.follower_count - old_follower_count,
                 likes_change=profile.total_likes - old_likes,
-                recorded_at=datetime.utcnow()
+                recorded_at=datetime.now(datetime.UTC)
             )
             db.add(history)
             
@@ -452,7 +452,7 @@ class TikTokScraper(BaseScraper):
             profile.total_likes = profile_data.total_likes
             profile.video_count = profile_data.video_count
             profile.average_post_views = new_avg_views
-            profile.last_scraped_at = datetime.utcnow()
+            profile.last_scraped_at = datetime.now(datetime.UTC)
             
             # History snapshot
             history = ProfileHistory(
@@ -463,7 +463,7 @@ class TikTokScraper(BaseScraper):
                 video_count=profile.video_count,
                 follower_change=profile.follower_count - old_follower_count,
                 likes_change=profile.total_likes - old_likes,
-                recorded_at=datetime.utcnow()
+                recorded_at=datetime.now(datetime.UTC)
             )
             db.add(history)
             
@@ -638,7 +638,7 @@ class TikTokScraper(BaseScraper):
             existing.like_count = post_data.like_count
             existing.comment_count = post_data.comment_count
             existing.share_count = post_data.share_count
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(datetime.UTC)
             
             # Check if newly viral (wasn't before, is now)
             if is_viral and not existing.is_viral:

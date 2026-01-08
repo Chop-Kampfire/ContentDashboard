@@ -501,7 +501,7 @@ class TikTokClient:
                 logger.error("❌ Could not find posts array in any expected location")
                 logger.debug(f"🔍 Full response (first 1000 chars): {str(data)[:1000]}")
 
-        cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+        cutoff_date = datetime.now(datetime.UTC) - timedelta(days=days_back)
         posts = []
 
         for idx, item in enumerate(posts_list):
@@ -519,14 +519,14 @@ class TikTokClient:
                         posted_at = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
                     except Exception as e:
                         logger.warning(f"Failed to parse ISO timestamp '{create_time}': {e}")
-                        posted_at = datetime.utcnow()
+                        posted_at = datetime.now(datetime.UTC)
                 else:
                     # Unix timestamp
                     try:
-                        posted_at = datetime.utcfromtimestamp(int(create_time)) if create_time else datetime.utcnow()
+                        posted_at = datetime.fromtimestamp(int(create_time), tz=datetime.UTC) if create_time else datetime.now(datetime.UTC)
                     except Exception as e:
                         logger.warning(f"Failed to parse Unix timestamp '{create_time}': {e}")
-                        posted_at = datetime.utcnow()
+                        posted_at = datetime.now(datetime.UTC)
 
                 # TEMPORARILY DISABLED: Skip old posts for debugging
                 # if posted_at < cutoff_date:
