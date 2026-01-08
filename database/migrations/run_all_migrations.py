@@ -6,6 +6,7 @@ This script:
 1. Creates initial schema if tables don't exist (v0.0.1)
 2. Adds multi-platform support columns if needed (v0.0.2)
 3. Increases ID column lengths for long secUid values (v0.0.3)
+4. Adds subreddit_traffic table for Reddit analytics (v0.0.4)
 
 Railway Environment Variable Handling:
 - Retries up to 10 times with exponential backoff (max 30s total)
@@ -224,6 +225,42 @@ def run_migrations():
                 logger.info("")
             else:
                 logger.info(f"✅ v0.0.3 already applied (platform_user_id is VARCHAR({current_length}))")
+                logger.info("")
+
+        # =====================================================================
+        # STEP 5: Check and run v0.0.4 migration if needed
+        # =====================================================================
+        logger.info("🔍 Checking for v0.0.4 migration...")
+
+        with engine.connect() as conn:
+            # Check if v0.0.4 migration is needed (check for subreddit_traffic table)
+            result = conn.execute(text("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'subreddit_traffic'
+            """))
+
+            if not result.fetchone():
+                logger.info("⚠️  Schema needs upgrade to v0.0.4")
+                logger.info("")
+
+                # =====================================================================
+                # Run v0.0.4 migration (add subreddit_traffic table)
+                # =====================================================================
+                logger.info("🚀 Applying v0.0.4 migration (Subreddit Traffic Analytics)...")
+                logger.info("")
+
+                from database.migrations.v004_subreddit_traffic import run_migration as run_v004
+
+                success = run_v004()
+
+                if not success:
+                    logger.error("❌ Migration v0.0.4 failed")
+                    return False
+
+                logger.info("")
+            else:
+                logger.info("✅ v0.0.4 already applied (subreddit_traffic table exists)")
                 logger.info("")
 
         # =====================================================================
