@@ -22,8 +22,9 @@ apscheduler>=3.10.4
 # Web Scraping (Reddit traffic)
 beautifulsoup4>=4.12.0
 
-# Excel/Spreadsheet Integration
-openpyxl>=3.1.0
+# Google Sheets Integration
+gspread>=5.12.0
+google-auth>=2.23.0
 
 # Utilities
 python-dotenv>=1.0.0

@@ -7,7 +7,7 @@ by scraping the old.reddit.com traffic page. Designed for Railway cron execution
 
 Data is written to both:
 1. PostgreSQL database (for dashboard display)
-2. Excel spreadsheet (team_slack_addresses.xlsx) as source of truth
+2. Google Sheets (source of truth)
 
 Usage:
     python -m services.reddit_sync
@@ -19,10 +19,13 @@ Usage:
     python -m services.reddit_sync --spreadsheet-only
 
 Environment Variables:
-    REDDIT_SESSION_COOKIE - Reddit session cookie for authentication (reddit_session value)
-    REDDIT_SUBREDDIT      - Default subreddit to track (without r/)
-    DATABASE_URL          - PostgreSQL connection string
-    SPREADSHEET_PATH      - Path to Excel file (default: team_slack_addresses.xlsx)
+    REDDIT_SESSION_COOKIE     - Reddit session cookie for authentication
+    REDDIT_SUBREDDIT          - Default subreddit to track (without r/)
+    DATABASE_URL              - PostgreSQL connection string
+    GOOGLE_SHEETS_CREDENTIALS - JSON string of service account credentials
+                                (or path to credentials file)
+    GOOGLE_SPREADSHEET_ID     - Google Sheets spreadsheet ID
+                                (default: 19zkdmjds3b1F6IYY7U5ehQ_HeoBxy9kXUABBTm-U7T0)
 
 Railway Cron Schedule:
     0 0 * * * (runs daily at midnight UTC)
@@ -30,6 +33,7 @@ Railway Cron Schedule:
 
 import os
 import sys
+import json
 import argparse
 import re
 from datetime import datetime, timedelta
@@ -50,7 +54,7 @@ setup_root_logger()
 logger = get_logger(__name__)
 
 # Constants
-DEFAULT_SPREADSHEET = "team_slack_addresses.xlsx"
+DEFAULT_SPREADSHEET_ID = "19zkdmjds3b1F6IYY7U5ehQ_HeoBxy9kXUABBTm-U7T0"
 TRAFFIC_SHEET_NAME = "Reddit_Traffic_History"
 OLD_REDDIT_TRAFFIC_URL = "https://old.reddit.com/r/{subreddit}/about/traffic/"
 
@@ -346,18 +350,75 @@ def parse_traffic_table_generic(table) -> list[dict]:
 
 
 # =============================================================================
-# SPREADSHEET INTEGRATION
+# GOOGLE SHEETS INTEGRATION
 # =============================================================================
 
-def get_spreadsheet_path() -> Path:
-    """Get the path to the tracking spreadsheet."""
-    path_str = os.getenv("SPREADSHEET_PATH", DEFAULT_SPREADSHEET)
-    return Path(path_str)
+def get_google_credentials():
+    """
+    Get Google service account credentials from environment.
+
+    Returns:
+        google.oauth2.service_account.Credentials object
+    """
+    from google.oauth2.service_account import Credentials
+
+    creds_env = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")
+
+    if not creds_env:
+        raise ValueError(
+            "GOOGLE_SHEETS_CREDENTIALS environment variable is not set. "
+            "Set it to the JSON content of your service account key file, "
+            "or the path to the credentials JSON file."
+        )
+
+    # Check if it's a file path or JSON string
+    if os.path.isfile(creds_env):
+        logger.info(f"Loading credentials from file: {creds_env}")
+        return Credentials.from_service_account_file(
+            creds_env,
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
+    else:
+        # Assume it's a JSON string
+        try:
+            creds_data = json.loads(creds_env)
+            return Credentials.from_service_account_info(
+                creds_data,
+                scopes=[
+                    "https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"
+                ]
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"GOOGLE_SHEETS_CREDENTIALS is not valid JSON and not a valid file path: {e}"
+            )
+
+
+def get_spreadsheet_id() -> str:
+    """Get Google Spreadsheet ID from environment or use default."""
+    return os.getenv("GOOGLE_SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
+
+
+def get_gspread_client():
+    """
+    Get authenticated gspread client.
+
+    Returns:
+        gspread.Client object
+    """
+    import gspread
+
+    credentials = get_google_credentials()
+    return gspread.authorize(credentials)
 
 
 def write_to_spreadsheet(subreddit_name: str, traffic_data: list[dict]) -> int:
     """
-    Write traffic data to Excel spreadsheet, avoiding duplicates.
+    Write traffic data to Google Sheets, avoiding duplicates.
 
     Args:
         subreddit_name: Name of the subreddit
@@ -366,84 +427,79 @@ def write_to_spreadsheet(subreddit_name: str, traffic_data: list[dict]) -> int:
     Returns:
         Number of new records written
     """
-    spreadsheet_path = get_spreadsheet_path()
-    logger.info(f"Writing to spreadsheet: {spreadsheet_path}")
+    import gspread
+    from gspread.exceptions import WorksheetNotFound
 
-    # Prepare data as DataFrame
-    new_df = pd.DataFrame(traffic_data)
-    new_df["subreddit"] = subreddit_name
-    new_df["date"] = pd.to_datetime(new_df["timestamp"]).dt.date
-    new_df["sync_timestamp"] = datetime.utcnow()
+    spreadsheet_id = get_spreadsheet_id()
+    logger.info(f"Writing to Google Sheets: {spreadsheet_id}")
 
-    # Reorder columns
-    new_df = new_df[["date", "subreddit", "unique_visitors", "pageviews", "subscriptions", "sync_timestamp"]]
+    client = get_gspread_client()
+    spreadsheet = client.open_by_key(spreadsheet_id)
 
+    # Try to get the traffic sheet, create if it doesn't exist
     try:
-        # Check if file exists
-        if spreadsheet_path.exists():
-            # Read existing data
-            try:
-                existing_df = pd.read_excel(
-                    spreadsheet_path,
-                    sheet_name=TRAFFIC_SHEET_NAME,
-                    engine="openpyxl"
-                )
-                existing_df["date"] = pd.to_datetime(existing_df["date"]).dt.date
+        worksheet = spreadsheet.worksheet(TRAFFIC_SHEET_NAME)
+        logger.info(f"Found existing sheet: {TRAFFIC_SHEET_NAME}")
+    except WorksheetNotFound:
+        logger.info(f"Creating new sheet: {TRAFFIC_SHEET_NAME}")
+        worksheet = spreadsheet.add_worksheet(
+            title=TRAFFIC_SHEET_NAME,
+            rows=1000,
+            cols=6
+        )
+        # Add header row
+        worksheet.update("A1:F1", [["Date", "Subreddit", "Unique Visitors", "Page Views", "Subscriptions", "Sync Timestamp"]])
 
-                # Find new records (not in existing data)
-                existing_dates = set(
-                    (row["date"], row["subreddit"])
-                    for _, row in existing_df.iterrows()
-                )
+    # Get existing data to check for duplicates
+    existing_data = worksheet.get_all_records()
+    existing_dates = set()
 
-                new_records = new_df[
-                    ~new_df.apply(
-                        lambda row: (row["date"], row["subreddit"]) in existing_dates,
-                        axis=1
-                    )
-                ]
+    for row in existing_data:
+        date_val = row.get("Date", "")
+        sub_val = row.get("Subreddit", "")
+        if date_val and sub_val:
+            existing_dates.add((str(date_val), str(sub_val)))
 
-                if new_records.empty:
-                    logger.info("No new records to add to spreadsheet")
-                    return 0
+    logger.debug(f"Found {len(existing_dates)} existing records in sheet")
 
-                # Append new records
-                combined_df = pd.concat([existing_df, new_records], ignore_index=True)
-                combined_df = combined_df.sort_values(["subreddit", "date"], ascending=[True, False])
+    # Prepare new records
+    new_rows = []
+    for record in traffic_data:
+        date_str = record["timestamp"].strftime("%Y-%m-%d")
+        key = (date_str, subreddit_name)
 
-            except ValueError:
-                # Sheet doesn't exist, create new
-                logger.info(f"Creating new sheet: {TRAFFIC_SHEET_NAME}")
-                combined_df = new_df
-                new_records = new_df
+        if key not in existing_dates:
+            new_rows.append([
+                date_str,
+                subreddit_name,
+                record["unique_visitors"],
+                record["pageviews"],
+                record["subscriptions"],
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            ])
 
-            # Write back to spreadsheet (preserving other sheets)
-            with pd.ExcelWriter(
-                spreadsheet_path,
-                engine="openpyxl",
-                mode="a",
-                if_sheet_exists="replace"
-            ) as writer:
-                combined_df.to_excel(writer, sheet_name=TRAFFIC_SHEET_NAME, index=False)
+    if not new_rows:
+        logger.info("No new records to add to Google Sheets")
+        return 0
 
-        else:
-            # Create new spreadsheet
-            logger.info(f"Creating new spreadsheet: {spreadsheet_path}")
-            new_df.to_excel(spreadsheet_path, sheet_name=TRAFFIC_SHEET_NAME, index=False, engine="openpyxl")
-            new_records = new_df
+    # Append new rows
+    # Find the next empty row
+    all_values = worksheet.get_all_values()
+    next_row = len(all_values) + 1
 
-        records_written = len(new_records)
-        logger.info(f"Wrote {records_written} new records to spreadsheet")
-        return records_written
+    # Update in batch for efficiency
+    end_row = next_row + len(new_rows) - 1
+    range_str = f"A{next_row}:F{end_row}"
 
-    except Exception as e:
-        logger.error(f"Spreadsheet error: {e}")
-        raise
+    worksheet.update(range_str, new_rows)
+
+    logger.info(f"Wrote {len(new_rows)} new records to Google Sheets")
+    return len(new_rows)
 
 
 def read_from_spreadsheet(subreddit_name: Optional[str] = None) -> pd.DataFrame:
     """
-    Read traffic data from spreadsheet.
+    Read traffic data from Google Sheets.
 
     Args:
         subreddit_name: Filter by subreddit (None for all)
@@ -451,24 +507,31 @@ def read_from_spreadsheet(subreddit_name: Optional[str] = None) -> pd.DataFrame:
     Returns:
         DataFrame with traffic data
     """
-    spreadsheet_path = get_spreadsheet_path()
+    from gspread.exceptions import WorksheetNotFound
 
-    if not spreadsheet_path.exists():
-        logger.warning(f"Spreadsheet not found: {spreadsheet_path}")
-        return pd.DataFrame()
+    spreadsheet_id = get_spreadsheet_id()
 
     try:
-        df = pd.read_excel(spreadsheet_path, sheet_name=TRAFFIC_SHEET_NAME, engine="openpyxl")
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet(TRAFFIC_SHEET_NAME)
+
+        records = worksheet.get_all_records()
+        df = pd.DataFrame(records)
+
+        if df.empty:
+            return df
 
         if subreddit_name:
-            df = df[df["subreddit"] == subreddit_name]
+            df = df[df["Subreddit"] == subreddit_name]
 
         return df
-    except ValueError:
+
+    except WorksheetNotFound:
         logger.warning(f"Sheet '{TRAFFIC_SHEET_NAME}' not found in spreadsheet")
         return pd.DataFrame()
     except Exception as e:
-        logger.error(f"Error reading spreadsheet: {e}")
+        logger.error(f"Error reading from Google Sheets: {e}")
         return pd.DataFrame()
 
 
@@ -549,8 +612,8 @@ def sync_reddit_traffic(
 
     Args:
         subreddit_name: Subreddit to sync (uses REDDIT_SUBREDDIT env var if not provided)
-        spreadsheet_only: Only write to spreadsheet, skip database
-        database_only: Only write to database, skip spreadsheet
+        spreadsheet_only: Only write to Google Sheets, skip database
+        database_only: Only write to database, skip Google Sheets
 
     Returns:
         True if sync succeeded, False otherwise
@@ -569,7 +632,7 @@ def sync_reddit_traffic(
     logger.info("=" * 60)
     logger.info(f"REDDIT TRAFFIC SYNC - r/{subreddit_name}")
     logger.info(f"Started at: {datetime.utcnow().isoformat()}Z")
-    logger.info(f"Mode: {'Spreadsheet Only' if spreadsheet_only else 'Database Only' if database_only else 'Full Sync'}")
+    logger.info(f"Mode: {'Google Sheets Only' if spreadsheet_only else 'Database Only' if database_only else 'Full Sync'}")
     logger.info("=" * 60)
 
     try:
@@ -583,12 +646,12 @@ def sync_reddit_traffic(
         spreadsheet_records = 0
         database_records = 0
 
-        # Write to spreadsheet (source of truth)
+        # Write to Google Sheets (source of truth)
         if not database_only:
             try:
                 spreadsheet_records = write_to_spreadsheet(subreddit_name, traffic_data)
             except Exception as e:
-                logger.error(f"Spreadsheet write failed: {e}")
+                logger.error(f"Google Sheets write failed: {e}")
                 if spreadsheet_only:
                     return False
 
@@ -598,14 +661,14 @@ def sync_reddit_traffic(
                 database_records = upsert_traffic_data(subreddit_name, traffic_data)
             except Exception as e:
                 logger.error(f"Database write failed: {e}")
-                # Continue even if database fails - spreadsheet is source of truth
+                # Continue even if database fails - Google Sheets is source of truth
 
         logger.info("=" * 60)
         logger.info("SYNC COMPLETE")
         logger.info(f"  Subreddit: r/{subreddit_name}")
         logger.info(f"  Records scraped: {len(traffic_data)}")
         if not database_only:
-            logger.info(f"  Spreadsheet (new): {spreadsheet_records}")
+            logger.info(f"  Google Sheets (new): {spreadsheet_records}")
         if not spreadsheet_only:
             logger.info(f"  Database (upserted): {database_records}")
         logger.info(f"  Completed at: {datetime.utcnow().isoformat()}Z")
@@ -644,12 +707,12 @@ def main():
     parser.add_argument(
         "--spreadsheet-only",
         action="store_true",
-        help="Only write to spreadsheet, skip database",
+        help="Only write to Google Sheets, skip database",
     )
     parser.add_argument(
         "--database-only",
         action="store_true",
-        help="Only write to database, skip spreadsheet",
+        help="Only write to database, skip Google Sheets",
     )
 
     args = parser.parse_args()
