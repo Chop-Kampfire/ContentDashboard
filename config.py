@@ -17,7 +17,7 @@ class Config:
     
     # RapidAPI TikTok
     RAPIDAPI_KEY: str = os.getenv("RAPIDAPI_KEY", "")
-    RAPIDAPI_HOST: str = os.getenv("RAPIDAPI_HOST", "scraptik.p.rapidapi.com")
+    RAPIDAPI_HOST: str = os.getenv("RAPIDAPI_HOST", "tiktok-api23.p.rapidapi.com")
     
     # Telegram Bot
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")

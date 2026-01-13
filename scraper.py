@@ -912,9 +912,14 @@ async def update_all_profiles() -> dict:
 
         for profile_id, username in profile_list:
             try:
-                await scraper.update_profile_by_id(profile_id)
-                results["success"] += 1
-                results["by_platform"][platform]["success"] += 1
+                result = await scraper.update_profile_by_id(profile_id)
+                if result is not None:
+                    results["success"] += 1
+                    results["by_platform"][platform]["success"] += 1
+                else:
+                    logger.warning(f"Failed to update @{username} ({platform}) - API call failed")
+                    results["failed"] += 1
+                    results["by_platform"][platform]["failed"] += 1
             except NotImplementedError:
                 logger.warning(f"Skipping {platform} profile @{username} (not implemented)")
                 results["failed"] += 1
