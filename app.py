@@ -1064,17 +1064,30 @@ def refresh_all_data() -> tuple[bool, str]:
     Returns:
         Tuple of (success: bool, message: str)
     """
-    from scraper import update_all_profiles
-
-    logger.info("Manual refresh triggered - updating all profiles")
+    logger.info("=" * 60)
+    logger.info("MANUAL REFRESH TRIGGERED")
+    logger.info("=" * 60)
 
     try:
+        from scraper import update_all_profiles
+        logger.info("Scraper module imported successfully")
+    except Exception as e:
+        logger.error(f"Failed to import scraper: {e}", exc_info=True)
+        return False, f"Import error: {str(e)}"
+
+    try:
+        logger.info("Creating async event loop...")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+        logger.info("Starting update_all_profiles()...")
         results = loop.run_until_complete(update_all_profiles())
         loop.close()
 
+        logger.info(f"Scraper results: {results}")
+
         # Clear cache to show new data
+        logger.info("Clearing Streamlit cache...")
         get_all_profiles.clear()
         get_aggregate_stats.clear()
         get_all_posts.clear()
@@ -1082,6 +1095,8 @@ def refresh_all_data() -> tuple[bool, str]:
         success_count = results.get('success', 0)
         failed_count = results.get('failed', 0)
         total = success_count + failed_count
+
+        logger.info(f"Refresh complete: {success_count} success, {failed_count} failed")
 
         if total == 0:
             return True, "No profiles to update"
@@ -1092,7 +1107,7 @@ def refresh_all_data() -> tuple[bool, str]:
         else:
             return True, f"⚠️ Updated {success_count}/{total} profiles ({failed_count} failed)"
     except Exception as e:
-        logger.error(f"Failed to refresh data: {e}")
+        logger.error(f"Failed to refresh data: {e}", exc_info=True)
         return False, f"Error: {str(e)}"
 
 
@@ -1777,14 +1792,23 @@ def render_sidebar():
 
         # Refresh button
         if st.button("🔄 Refresh Data", width="stretch"):
+            logger.info("Refresh Data button clicked")
             with st.spinner("Fetching latest data from all platforms..."):
-                success, message = refresh_all_data()
-                if success:
-                    st.success(message)
-                    time.sleep(1.5)  # Brief pause to show message
-                    st.rerun()
-                else:
-                    st.error(message)
+                try:
+                    success, message = refresh_all_data()
+                    logger.info(f"Refresh result: success={success}, message={message}")
+                    if success:
+                        st.success(message)
+                        time.sleep(1.5)  # Brief pause to show message
+                        logger.info("Triggering app rerun...")
+                        st.rerun()
+                    else:
+                        st.error(message)
+                        logger.error(f"Refresh failed: {message}")
+                except Exception as e:
+                    error_msg = f"Unexpected error during refresh: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    st.error(error_msg)
 
         st.markdown("---")
         
