@@ -1039,22 +1039,61 @@ def remove_profile_from_watchlist(username: str) -> tuple[bool, str]:
     session = get_session()
     if not session:
         return False, "Database connection failed"
-    
+
     try:
         profile = session.query(Profile).filter(Profile.username == username.lower()).first()
         if profile:
             profile.is_active = False
             session.commit()
-            
+
             # Clear cache
             get_all_profiles.clear()
             get_aggregate_stats.clear()
-            
+
             logger.info(f"Removed profile from watchlist: @{username}")
             return True, f"Removed @{username} from watchlist"
         return False, f"Profile @{username} not found"
     finally:
         session.close()
+
+
+def refresh_all_data() -> tuple[bool, str]:
+    """
+    Trigger a scrape of all tracked profiles to fetch latest data.
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    from scraper import update_all_profiles
+
+    logger.info("Manual refresh triggered - updating all profiles")
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        results = loop.run_until_complete(update_all_profiles())
+        loop.close()
+
+        # Clear cache to show new data
+        get_all_profiles.clear()
+        get_aggregate_stats.clear()
+        get_all_posts.clear()
+
+        success_count = results.get('success', 0)
+        failed_count = results.get('failed', 0)
+        total = success_count + failed_count
+
+        if total == 0:
+            return True, "No profiles to update"
+        elif failed_count == 0:
+            return True, f"✅ Successfully updated all {success_count} profiles"
+        elif success_count == 0:
+            return False, f"❌ Failed to update {failed_count} profiles"
+        else:
+            return True, f"⚠️ Updated {success_count}/{total} profiles ({failed_count} failed)"
+    except Exception as e:
+        logger.error(f"Failed to refresh data: {e}")
+        return False, f"Error: {str(e)}"
 
 
 # =============================================================================
@@ -1735,14 +1774,18 @@ def render_sidebar():
         st.metric("Viral Posts", stats.get('viral_posts', 0))
         
         st.markdown("---")
-        
+
         # Refresh button
         if st.button("🔄 Refresh Data", width="stretch"):
-            get_all_profiles.clear()
-            get_all_posts.clear()
-            get_aggregate_stats.clear()
-            st.rerun()
-        
+            with st.spinner("Fetching latest data from all platforms..."):
+                success, message = refresh_all_data()
+                if success:
+                    st.success(message)
+                    time.sleep(1.5)  # Brief pause to show message
+                    st.rerun()
+                else:
+                    st.error(message)
+
         st.markdown("---")
         
         # Info
